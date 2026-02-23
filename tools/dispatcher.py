@@ -1,0 +1,168 @@
+"""
+tools/dispatcher.py — Routes Claude tool_use blocks to the correct handler.
+
+All exceptions (including ScopeViolation) are caught here and returned
+as error JSON so the agent loop NEVER crashes on a tool failure.
+"""
+from __future__ import annotations
+
+import json
+import traceback
+from typing import Any, Dict
+
+from config import Config
+from scope import ScopeEnforcer, ScopeViolation
+from session_log import SessionLogger
+
+from tools.nmap_tool import run_nmap
+from tools.nuclei_tool import run_nuclei
+from tools.ffuf_tool import run_ffuf
+from tools.sqlmap_tool import run_sqlmap
+from tools.metasploit_tool import run_metasploit
+from tools.http_tool import run_http_request
+from tools.report_tool import generate_report
+
+
+class ToolDispatcher:
+    """Routes tool calls from the agent to the correct handler function."""
+
+    def __init__(
+        self,
+        config: Config,
+        scope: ScopeEnforcer,
+        session_logger: SessionLogger,
+    ) -> None:
+        self.config = config
+        self.scope = scope
+        self.logger = session_logger
+
+    def dispatch(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """
+        Dispatch *tool_name* with *tool_input* to the correct handler.
+
+        Returns a JSON string. Never raises — all exceptions become error JSON.
+        """
+        try:
+            return self._route(tool_name, tool_input)
+        except ScopeViolation as exc:
+            return json.dumps({
+                "error": "SCOPE_VIOLATION",
+                "message": str(exc),
+                "tool": tool_name,
+            })
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.logger.log_error(
+                error=str(exc),
+                context={"tool": tool_name, "traceback": tb[:2000]},
+            )
+            return json.dumps({
+                "error": "TOOL_ERROR",
+                "message": str(exc),
+                "tool": tool_name,
+            })
+
+    # ------------------------------------------------------------------ #
+    # Routing                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _route(self, tool_name: str, inp: Dict[str, Any]) -> str:
+        cfg = self.config
+
+        if tool_name == "nmap_scan":
+            return run_nmap(
+                target=inp["target"],
+                scan_type=inp.get("scan_type", "version"),
+                ports=inp.get("ports"),
+                extra_flags=inp.get("extra_flags"),
+                timeout_seconds=int(inp.get("timeout_seconds", 300)),
+                nmap_path=cfg.nmap_path,
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "nuclei_scan":
+            return run_nuclei(
+                target=inp["target"],
+                templates=inp.get("templates"),
+                severity=inp.get("severity"),
+                extra_flags=inp.get("extra_flags"),
+                timeout_seconds=int(inp.get("timeout_seconds", 300)),
+                nuclei_path=cfg.nuclei_path,
+                nuclei_templates_path=cfg.nuclei_templates_path or None,
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "ffuf_scan":
+            return run_ffuf(
+                target=inp["target"],
+                scan_mode=inp.get("scan_mode", "directory"),
+                wordlist=inp.get("wordlist"),
+                extensions=inp.get("extensions"),
+                filter_status=inp.get("filter_status", "404"),
+                threads=int(inp.get("threads", 40)),
+                timeout_seconds=int(inp.get("timeout_seconds", 120)),
+                ffuf_path=cfg.ffuf_path,
+                default_wordlist=cfg.default_wordlist,
+                subdomains_wordlist=cfg.subdomains_wordlist,
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "sqlmap_scan":
+            return run_sqlmap(
+                url=inp["url"],
+                parameter=inp.get("parameter"),
+                level=int(inp.get("level", 1)),
+                risk=int(inp.get("risk", 1)),
+                dump_tables=bool(inp.get("dump_tables", False)),
+                extra_flags=inp.get("extra_flags"),
+                timeout_seconds=int(inp.get("timeout_seconds", 180)),
+                sqlmap_path=cfg.sqlmap_path,
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "metasploit_run":
+            return run_metasploit(
+                module_path=inp["module_path"],
+                options=inp.get("options"),
+                check_only=bool(inp.get("check_only", True)),
+                timeout_seconds=int(inp.get("timeout_seconds", 120)),
+                msf_host=cfg.msf_host,
+                msf_port=cfg.msf_port,
+                msf_user=cfg.msf_user,
+                msf_password=cfg.msf_password,
+                msf_ssl=cfg.msf_ssl,
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "http_request":
+            return run_http_request(
+                url=inp["url"],
+                method=inp.get("method", "GET"),
+                headers=inp.get("headers"),
+                body=inp.get("body"),
+                follow_redirects=bool(inp.get("follow_redirects", True)),
+                timeout_seconds=int(inp.get("timeout_seconds", 30)),
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
+        elif tool_name == "generate_report":
+            return generate_report(
+                target=inp["target"],
+                executive_summary=inp["executive_summary"],
+                findings=inp.get("findings", []),
+                methodology_notes=inp.get("methodology_notes"),
+                output_dir=cfg.output_dir,
+            )
+
+        else:
+            return json.dumps({
+                "error": "UNKNOWN_TOOL",
+                "message": f"No handler registered for tool: {tool_name!r}",
+                "tool": tool_name,
+            })
