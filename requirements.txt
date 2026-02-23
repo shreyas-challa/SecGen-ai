@@ -1,0 +1,5 @@
+anthropic>=0.40.0
+pymetasploit3>=1.0.3
+requests>=2.32.0
+python-dotenv>=1.0.0
+urllib3>=2.0.0

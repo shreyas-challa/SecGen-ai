@@ -1,0 +1,251 @@
+"""
+agent.py — Core Claude tool-use agent loop for the security research agent.
+
+The agent drives through the full pentest lifecycle by:
+  1. Sending the current message history to Claude
+  2. Logging Claude's reasoning
+  3. Dispatching any tool_use blocks to the ToolDispatcher
+  4. Appending ALL tool results as a single user message (API requirement)
+  5. Repeating until: end_turn with no tool calls, generate_report called,
+     or max_iterations reached
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
+import anthropic
+
+from config import Config
+from scope import ScopeEnforcer
+from session_log import SessionLogger
+from system_prompt import build_system_prompt
+from tools.definitions import TOOL_DEFINITIONS
+from tools.dispatcher import ToolDispatcher
+
+
+class SecurityAgent:
+    """Orchestrates the Claude-powered penetration test."""
+
+    def __init__(
+        self,
+        config: Config,
+        scope: ScopeEnforcer,
+        target: str,
+        session_logger: SessionLogger,
+    ) -> None:
+        self.config = config
+        self.scope = scope
+        self.target = target
+        self.logger = session_logger
+        self.dispatcher = ToolDispatcher(config, scope, session_logger)
+        self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        self.messages: List[Dict[str, Any]] = []
+        self.report_path: Optional[str] = None
+
+    # ------------------------------------------------------------------ #
+    # Public entry point                                                   #
+    # ------------------------------------------------------------------ #
+
+    def run(self) -> Optional[str]:
+        """
+        Execute the agent loop.
+
+        Returns the path to the generated report (if any), or None.
+        """
+        scope_description = self._build_scope_description()
+        system_prompt = build_system_prompt(self.target, scope_description)
+
+        # Seed the conversation
+        initial_message = (
+            f"Begin a comprehensive penetration test against: {self.target}. "
+            f"Start with Phase 1 reconnaissance."
+        )
+        self.messages.append({"role": "user", "content": initial_message})
+
+        generate_report_called = False
+        stop_reason = "INIT"
+
+        for iteration in range(1, self.config.max_iterations + 1):
+            self.logger.log_iteration(iteration)
+            print(f"\n[*] Iteration {iteration}/{self.config.max_iterations}", flush=True)
+
+            # ---- Call Claude ----------------------------------------- #
+            try:
+                response = self.client.messages.create(
+                    model=self.config.claude_model,
+                    max_tokens=8192,
+                    system=system_prompt,
+                    tools=TOOL_DEFINITIONS,
+                    messages=self.messages,
+                )
+            except anthropic.APIError as exc:
+                self.logger.log_error(str(exc), context={"iteration": iteration})
+                print(f"[!] Anthropic API error: {exc}", flush=True)
+                break
+
+            stop_reason = response.stop_reason
+            usage = {
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+            }
+
+            # Serialize content for logging / message history
+            content_blocks = _serialize_content(response.content)
+            self.messages.append({"role": "assistant", "content": response.content})
+
+            self.logger.log_claude_message(
+                role="assistant",
+                content=content_blocks,
+                iteration=iteration,
+                stop_reason=stop_reason,
+                usage=usage,
+            )
+
+            print(
+                f"    stop_reason={stop_reason}  "
+                f"in={usage['input_tokens']} out={usage['output_tokens']}",
+                flush=True,
+            )
+
+            # ---- Extract tool_use blocks ----------------------------- #
+            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+
+            # Print any text reasoning from Claude
+            for block in response.content:
+                if block.type == "text" and block.text.strip():
+                    print(f"\n[Claude] {block.text[:500]}", flush=True)
+
+            # ---- Check for natural stop ----------------------------- #
+            if stop_reason == "end_turn" and not tool_use_blocks:
+                print("[*] Claude finished without tool calls — stopping.", flush=True)
+                break
+
+            if not tool_use_blocks:
+                # stop_reason == "max_tokens" or other — no tools to process
+                break
+
+            # ---- Dispatch all tool calls ----------------------------- #
+            tool_results: List[Dict[str, Any]] = []
+            report_called_this_turn = False
+
+            for block in tool_use_blocks:
+                tool_name = block.name
+                tool_input = block.input
+                tool_use_id = block.id
+
+                self.logger.log_tool_call(
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    iteration=iteration,
+                )
+                print(f"    -> Calling: {tool_name}({_summarize_input(tool_input)})", flush=True)
+
+                result_str = self.dispatcher.dispatch(tool_name, tool_input)
+
+                self.logger.log_tool_result(
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    result=result_str,
+                    iteration=iteration,
+                )
+
+                # Capture report path if generate_report was called
+                if tool_name == "generate_report":
+                    report_called_this_turn = True
+                    generate_report_called = True
+                    try:
+                        parsed = json.loads(result_str)
+                        self.report_path = parsed.get("report_path")
+                        print(f"    [+] Report written: {self.report_path}", flush=True)
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_str,
+                })
+
+            # ---- Append ALL tool results as ONE user message --------- #
+            self.messages.append({"role": "user", "content": tool_results})
+
+            # ---- Stop after report is confirmed --------------------- #
+            if report_called_this_turn:
+                print("[*] generate_report called — allowing one final Claude turn.", flush=True)
+                # Allow Claude to see the report result and produce a closing message
+                try:
+                    final_response = self.client.messages.create(
+                        model=self.config.claude_model,
+                        max_tokens=2048,
+                        system=system_prompt,
+                        tools=TOOL_DEFINITIONS,
+                        messages=self.messages,
+                    )
+                    self.messages.append({"role": "assistant", "content": final_response.content})
+                    for block in final_response.content:
+                        if block.type == "text" and block.text.strip():
+                            print(f"\n[Claude] {block.text[:1000]}", flush=True)
+                    self.logger.log_claude_message(
+                        role="assistant",
+                        content=_serialize_content(final_response.content),
+                        iteration=iteration + 1,
+                        stop_reason=final_response.stop_reason,
+                    )
+                except Exception:
+                    pass
+                break
+
+        # ---- Session end -------------------------------------------- #
+        reason = "max_iterations" if iteration >= self.config.max_iterations else stop_reason
+        self.logger.log_session_end(
+            reason=reason,
+            iterations_used=iteration,
+            report_path=self.report_path,
+        )
+
+        if self.report_path:
+            print(f"\n[+] Penetration test complete. Report: {self.report_path}", flush=True)
+        else:
+            print("\n[!] Agent stopped without generating a report.", flush=True)
+
+        return self.report_path
+
+    # ------------------------------------------------------------------ #
+    # Helpers                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _build_scope_description(self) -> str:
+        parts: List[str] = []
+        if self.config.allowed_scope:
+            parts.append("Allowed targets: " + ", ".join(self.config.allowed_scope))
+        else:
+            parts.append(f"Single target: {self.target}")
+        return "; ".join(parts)
+
+
+# ------------------------------------------------------------------ #
+# Module-level helpers                                                #
+# ------------------------------------------------------------------ #
+
+def _serialize_content(content: Any) -> Any:
+    """Convert Anthropic content objects to plain dicts for JSON serialization."""
+    if isinstance(content, list):
+        return [_serialize_content(b) for b in content]
+    if hasattr(content, "__dict__"):
+        return {k: _serialize_content(v) for k, v in vars(content).items()}
+    return content
+
+
+def _summarize_input(tool_input: Dict) -> str:
+    """Produce a short one-line summary of tool input for console output."""
+    parts = []
+    for key, value in tool_input.items():
+        if isinstance(value, str) and len(value) < 60:
+            parts.append(f"{key}={value!r}")
+        elif isinstance(value, (int, bool, float)):
+            parts.append(f"{key}={value}")
+        else:
+            parts.append(f"{key}=...")
+    return ", ".join(parts[:4])
