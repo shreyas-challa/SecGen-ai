@@ -2,7 +2,7 @@
 
 An autonomous penetration testing agent powered by Claude. Point it at a target, and it drives through the entire pentest lifecycle — from reconnaissance to exploitation to privilege escalation to report — by itself using Claude's tool-use capability.
 
-Built for the **"AI for Productivity and Research"** hackathon theme. The agent automates work that normally takes security researchers hours of manual effort.
+The agent automates work that normally takes security researchers hours of manual effort.
 
 Claude acts as the brain — it decides what to scan, interprets results, chains actions, exploits vulnerabilities, escalates privileges, and produces a detailed report. External tools (nmap, nuclei, ffuf, sqlmap, metasploit) plus arbitrary shell commands are wrapped as Claude tools.
 
