@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def show_banner(target: str, scope_list: list, dry_run: bool, mode: str, lhost: str, lport: int) -> None:
+def show_banner(target: str, scope_list: list, dry_run: bool, mode: str, lhost: str, lport: int, provider: str = "anthropic", model: str = "") -> None:
     mode_display = {
         "htb": "HTB (aggressive — full exploitation)",
         "pentest": "PENTEST (conservative — PoC only)",
@@ -97,6 +97,7 @@ def show_banner(target: str, scope_list: list, dry_run: bool, mode: str, lhost: 
     print(f"  Target  : {target}")
     print(f"  Scope   : {scope_str}")
     print(f"  Mode    : {mode_display}")
+    print(f"  Provider: {provider} ({model})")
     if lhost:
         print(f"  LHOST   : {lhost}:{lport}")
     print("=" * 60)
@@ -179,7 +180,7 @@ def main() -> None:
     fields["allowed_scope"] = scope_list
     config = Config(**fields)
 
-    show_banner(target, scope_list, config.dry_run, config.agent_mode, config.lhost, config.lport)
+    show_banner(target, scope_list, config.dry_run, config.agent_mode, config.lhost, config.lport, config.provider, config.claude_model)
 
     # Warn if HTB mode without LHOST
     if config.agent_mode == "htb" and not config.lhost:
@@ -195,7 +196,7 @@ def main() -> None:
     session_logger = SessionLogger(config.output_dir, target)
 
     print(f"[*] Session log: {session_logger.log_path}")
-    print(f"[*] Model: {config.claude_model}")
+    print(f"[*] Provider: {config.provider} | Model: {config.claude_model}")
     print(f"[*] Max iterations: {config.max_iterations} (HTB mode may auto-increase to 50)")
     print(f"[*] Agent mode: {config.agent_mode}")
     print()

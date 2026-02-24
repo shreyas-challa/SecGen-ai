@@ -2,7 +2,7 @@
 agent.py — Core Claude tool-use agent loop for the security research agent.
 
 The agent drives through the full pentest lifecycle by:
-  1. Sending the current message history to Claude
+  1. Sending the current message history to the LLM (Anthropic or OpenRouter)
   2. Logging Claude's reasoning
   3. Dispatching any tool_use blocks to the ToolDispatcher
   4. Appending ALL tool results as a single user message (API requirement)
@@ -12,12 +12,10 @@ The agent drives through the full pentest lifecycle by:
 from __future__ import annotations
 
 import json
-import time
 from typing import Any, Dict, List, Optional
 
-import anthropic
-
 from config import Config
+from llm_client import create_llm_client
 from scope import ScopeEnforcer
 from session_log import SessionLogger
 from system_prompt import build_system_prompt
@@ -41,7 +39,14 @@ class SecurityAgent:
         self.target = target
         self.logger = session_logger
         self.dispatcher = ToolDispatcher(config, scope, session_logger)
-        self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+
+        # Create the LLM client based on provider config
+        api_key = (
+            config.openrouter_api_key
+            if config.provider == "openrouter"
+            else config.anthropic_api_key
+        )
+        self.llm = create_llm_client(config.provider, api_key)
         self.messages: List[Dict[str, Any]] = []
         self.report_path: Optional[str] = None
 
@@ -93,18 +98,18 @@ class SecurityAgent:
             self.logger.log_iteration(iteration)
             print(f"\n[*] Iteration {iteration}/{max_iter}", flush=True)
 
-            # ---- Call Claude (with retry on rate limits) -------------- #
+            # ---- Call LLM (with retry on rate limits) ---------------- #
             try:
-                response = self._call_claude_with_retry(
+                response = self.llm.call(
                     model=self.config.claude_model,
                     max_tokens=max_tokens,
                     system=system_prompt,
                     tools=TOOL_DEFINITIONS,
                     messages=self.messages,
                 )
-            except anthropic.APIError as exc:
+            except Exception as exc:
                 self.logger.log_error(str(exc), context={"iteration": iteration})
-                print(f"[!] Anthropic API error: {exc}", flush=True)
+                print(f"[!] API error: {exc}", flush=True)
                 break
 
             stop_reason = response.stop_reason
@@ -197,9 +202,8 @@ class SecurityAgent:
             # ---- Stop after report is confirmed --------------------- #
             if report_called_this_turn:
                 print("[*] generate_report called — allowing one final Claude turn.", flush=True)
-                # Allow Claude to see the report result and produce a closing message
                 try:
-                    final_response = self._call_claude_with_retry(
+                    final_response = self.llm.call(
                         model=self.config.claude_model,
                         max_tokens=2048,
                         system=system_prompt,
@@ -242,30 +246,6 @@ class SecurityAgent:
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
-
-    def _call_claude_with_retry(self, max_retries: int = 5, **kwargs) -> Any:
-        """
-        Call the Anthropic API with exponential backoff on rate limit errors.
-
-        Retries up to max_retries times with increasing wait (65s, 130s, 195s, ...)
-        to handle the 10K tokens/min rate limit.
-        """
-        for attempt in range(max_retries + 1):
-            try:
-                return self.client.messages.create(**kwargs)
-            except anthropic.RateLimitError as exc:
-                if attempt == max_retries:
-                    raise
-                # Parse retry-after header if available, otherwise use escalating backoff
-                wait_time = 65 * (attempt + 1)  # 65s, 130s, 195s, 260s, 325s
-                print(
-                    f"    [!] Rate limited (attempt {attempt + 1}/{max_retries}). "
-                    f"Waiting {wait_time}s...",
-                    flush=True,
-                )
-                time.sleep(wait_time)
-            except anthropic.APIError:
-                raise  # Non-rate-limit errors are not retried
 
     def _build_scope_description(self) -> str:
         parts: List[str] = []

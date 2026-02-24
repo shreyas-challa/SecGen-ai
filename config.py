@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class Config:
-    # Anthropic
+    # LLM Provider
+    provider: str               # "anthropic" or "openrouter"
     anthropic_api_key: str
+    openrouter_api_key: str
     claude_model: str
 
     # Metasploit RPC
@@ -70,16 +72,34 @@ def load_config() -> Config:
             return []
         return [item.strip() for item in raw.split(",") if item.strip()]
 
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
+    provider = os.getenv("PROVIDER", "anthropic").lower().strip()
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+
+    if provider == "openrouter" and not openrouter_key:
+        raise EnvironmentError(
+            "PROVIDER=openrouter but OPENROUTER_API_KEY is not set. "
+            "Set it in .env or switch PROVIDER to anthropic."
+        )
+    if provider == "anthropic" and not anthropic_key:
         raise EnvironmentError(
             "ANTHROPIC_API_KEY is not set. "
-            "Copy .env.example to .env and fill in your API key."
+            "Copy .env.example to .env and fill in your API key, "
+            "or set PROVIDER=openrouter with OPENROUTER_API_KEY."
         )
 
+    # Default model depends on provider
+    default_model = (
+        "anthropic/claude-sonnet-4"
+        if provider == "openrouter"
+        else "claude-sonnet-4-6"
+    )
+
     return Config(
-        anthropic_api_key=api_key,
-        claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6"),
+        provider=provider,
+        anthropic_api_key=anthropic_key,
+        openrouter_api_key=openrouter_key,
+        claude_model=os.getenv("CLAUDE_MODEL", default_model),
 
         msf_host=os.getenv("MSF_HOST", "127.0.0.1"),
         msf_port=_int("MSF_PORT", 55553),
