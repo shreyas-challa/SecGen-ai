@@ -87,6 +87,7 @@ def run_shell_command(
     working_dir: Optional[str] = None,
     scope: Optional[ScopeEnforcer] = None,
     dry_run: bool = False,
+    input_data: Optional[str] = None,
 ) -> str:
     """
     Execute shell commands or manage background processes.
@@ -94,7 +95,7 @@ def run_shell_command(
     Returns a JSON string with the result.
     """
     if action == "run":
-        return _action_run(command, timeout_seconds, working_dir, scope, dry_run)
+        return _action_run(command, timeout_seconds, working_dir, scope, dry_run, input_data)
     elif action == "run_background":
         return _action_run_background(command, working_dir, scope, dry_run)
     elif action == "check_background":
@@ -115,6 +116,7 @@ def _action_run(
     working_dir: Optional[str],
     scope: Optional[ScopeEnforcer],
     dry_run: bool,
+    input_data: Optional[str] = None,
 ) -> str:
     if not command:
         return json.dumps({"error": "MISSING_PARAM", "message": "command is required for action=run"})
@@ -134,14 +136,20 @@ def _action_run(
     cwd = _get_workdir(working_dir)
 
     try:
-        result = subprocess.run(
-            command,
+        run_kwargs: Dict[str, Any] = dict(
             shell=True,
-            capture_output=True,
             text=True,
             timeout=timeout_seconds,
             cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
+        if input_data is not None:
+            run_kwargs["input"] = input_data
+        else:
+            run_kwargs["stdin"] = subprocess.DEVNULL
+
+        result = subprocess.run(command, **run_kwargs)
         return json.dumps({
             "status": "success",
             "command": command,

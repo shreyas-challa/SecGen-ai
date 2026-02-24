@@ -335,6 +335,10 @@ TOOL_DEFINITIONS: List[dict] = [
                     "type": "string",
                     "description": "Working directory for the command. Defaults to output/workdir/.",
                 },
+                "input_data": {
+                    "type": "string",
+                    "description": "Data to pipe to the command's stdin. Use for commands that read from stdin (e.g. piping a password or script content).",
+                },
             },
             "required": ["action"],
         },

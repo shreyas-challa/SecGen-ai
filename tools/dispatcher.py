@@ -162,6 +162,7 @@ class ToolDispatcher:
                 working_dir=inp.get("working_dir"),
                 scope=self.scope,
                 dry_run=cfg.dry_run,
+                input_data=inp.get("input_data"),
             )
 
         elif tool_name == "generate_report":

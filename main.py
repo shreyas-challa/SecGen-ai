@@ -170,14 +170,14 @@ def main() -> None:
 
     target = args.target.strip()
 
-    # Ensure the target is always in scope (auto-add if scope is empty)
+    # Ensure the target is always in scope
     scope_list = list(config.allowed_scope)
-    if not scope_list:
-        scope_list = [target]
-        # Rebuild config with auto-scope
-        fields = {k: getattr(config, k) for k in config.__dataclass_fields__}
-        fields["allowed_scope"] = scope_list
-        config = Config(**fields)
+    if target not in scope_list:
+        scope_list.append(target)
+    # Rebuild config with updated scope
+    fields = {k: getattr(config, k) for k in config.__dataclass_fields__}
+    fields["allowed_scope"] = scope_list
+    config = Config(**fields)
 
     show_banner(target, scope_list, config.dry_run, config.agent_mode, config.lhost, config.lport)
 
