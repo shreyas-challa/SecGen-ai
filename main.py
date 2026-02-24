@@ -20,9 +20,6 @@ from session_log import SessionLogger
 from agent import SecurityAgent
 
 
-AUTHORIZATION_PHRASE = "YES I HAVE AUTHORIZATION"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="AI Security Research Agent — Claude-powered autonomous penetration tester",
@@ -63,11 +60,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def confirm_target(target: str, scope_list: list, dry_run: bool) -> None:
-    """
-    Display the target/scope and require the operator to type an explicit
-    authorization phrase before continuing.
-    """
+def show_banner(target: str, scope_list: list, dry_run: bool) -> None:
     mode = "DRY RUN (no real network activity)" if dry_run else "LIVE (real network scanning)"
     scope_str = ", ".join(scope_list) if scope_list else "(auto: " + target + ")"
 
@@ -80,22 +73,6 @@ def confirm_target(target: str, scope_list: list, dry_run: bool) -> None:
     print(f"  Mode    : {mode}")
     print("=" * 60)
     print()
-    print("WARNING: This tool performs active security testing.")
-    print("You must have explicit written authorization to test this target.")
-    print()
-    print(f'Type exactly: {AUTHORIZATION_PHRASE}')
-    print()
-
-    try:
-        user_input = input("> ").strip()
-    except EOFError:
-        user_input = ""
-
-    if user_input != AUTHORIZATION_PHRASE:
-        print("\n[!] Authorization not confirmed. Aborting.")
-        sys.exit(1)
-
-    print("\n[+] Authorization confirmed. Starting agent...\n")
 
 
 def apply_cli_overrides(config: Config, args: argparse.Namespace) -> Config:
@@ -147,8 +124,7 @@ def main() -> None:
         fields["allowed_scope"] = scope_list
         config = Config(**fields)
 
-    # Authorization gate
-    confirm_target(target, scope_list, config.dry_run)
+    show_banner(target, scope_list, config.dry_run)
 
     # Wire components
     scope_enforcer = ScopeEnforcer(config.allowed_scope)
