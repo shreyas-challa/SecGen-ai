@@ -37,6 +37,10 @@ class Config:
     nuclei_templates_path: str
 
     # Agent behaviour
+    agent_mode: str          # "htb" (aggressive) or "pentest" (conservative)
+    lhost: str               # Attacker IP for reverse shells (e.g. tun0 on HTB VPN)
+    lport: int               # Default listener port
+    shell_timeout: int       # Default shell command timeout in seconds
     max_iterations: int
     dry_run: bool
 
@@ -98,6 +102,10 @@ def load_config() -> Config:
         ),
         nuclei_templates_path=os.getenv("NUCLEI_TEMPLATES", ""),
 
+        agent_mode=os.getenv("AGENT_MODE", "htb"),
+        lhost=os.getenv("LHOST", ""),
+        lport=_int("LPORT", 4444),
+        shell_timeout=_int("SHELL_TIMEOUT", 120),
         max_iterations=_int("MAX_ITERATIONS", 30),
         dry_run=_bool("DRY_RUN", False),
 

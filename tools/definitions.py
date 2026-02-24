@@ -1,7 +1,7 @@
 """
 tools/definitions.py — Claude tool JSON schemas for the security agent.
 
-These 7 definitions are passed in the ``tools`` parameter of every
+These 8 definitions are passed in the ``tools`` parameter of every
 ``client.messages.create()`` call so Claude knows what tools are available
 and what parameters each accepts.
 """
@@ -290,7 +290,58 @@ TOOL_DEFINITIONS: List[dict] = [
     },
 
     # ------------------------------------------------------------------ #
-    # 7. generate_report                                                   #
+    # 7. shell_command                                                     #
+    # ------------------------------------------------------------------ #
+    {
+        "name": "shell_command",
+        "description": (
+            "Execute an arbitrary shell command on the local machine. "
+            "Use this for anything not covered by specialized tools: SSH into targets, "
+            "set up reverse shell listeners, compile exploits, run linpeas, "
+            "enumerate services (smbclient, ftp, etc.), upload/download files, "
+            "and perform privilege escalation. "
+            "Supports foreground execution and background process management."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["run", "run_background", "check_background", "stop_background"],
+                    "description": (
+                        "'run' — execute and wait for completion; "
+                        "'run_background' — start in background, return PID; "
+                        "'check_background' — read output from background PID; "
+                        "'stop_background' — terminate background PID."
+                    ),
+                },
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command to execute (required for run/run_background). "
+                        "Pipe through '| head -50' or '| grep -i keyword' to limit large outputs."
+                    ),
+                },
+                "pid": {
+                    "type": "integer",
+                    "description": "PID of the background process (required for check_background/stop_background).",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for foreground commands (default 120).",
+                    "default": 120,
+                },
+                "working_dir": {
+                    "type": "string",
+                    "description": "Working directory for the command. Defaults to output/workdir/.",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+
+    # ------------------------------------------------------------------ #
+    # 8. generate_report                                                   #
     # ------------------------------------------------------------------ #
     {
         "name": "generate_report",
@@ -345,6 +396,82 @@ TOOL_DEFINITIONS: List[dict] = [
                 "methodology_notes": {
                     "type": "string",
                     "description": "Notes on testing methodology, tools used, and any limitations.",
+                },
+                "flags_captured": {
+                    "type": "object",
+                    "description": "Captured CTF flags (HTB mode).",
+                    "properties": {
+                        "user_flag": {
+                            "type": "string",
+                            "description": "Contents of user.txt",
+                        },
+                        "root_flag": {
+                            "type": "string",
+                            "description": "Contents of root.txt",
+                        },
+                    },
+                },
+                "attack_chain": {
+                    "type": "array",
+                    "description": "Ordered steps showing the path from recon to root.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step": {
+                                "type": "integer",
+                                "description": "Step number in the chain.",
+                            },
+                            "phase": {
+                                "type": "string",
+                                "description": "Phase name (e.g. 'Enumeration', 'Exploitation', 'Privilege Escalation').",
+                            },
+                            "action": {
+                                "type": "string",
+                                "description": "What was done in this step.",
+                            },
+                            "result": {
+                                "type": "string",
+                                "description": "What the step achieved or revealed.",
+                            },
+                        },
+                        "required": ["step", "phase", "action", "result"],
+                    },
+                },
+                "shell_proof": {
+                    "type": "string",
+                    "description": "Command output proving shell access (e.g. output of 'whoami', 'id', 'hostname').",
+                },
+                "privilege_escalation": {
+                    "type": "object",
+                    "description": "Details of the privilege escalation vector used.",
+                    "properties": {
+                        "vector": {
+                            "type": "string",
+                            "description": "Name of the privesc vector (e.g. 'sudo misconfiguration', 'SUID binary').",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "How the vector was exploited.",
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": "Command output or proof of escalation.",
+                        },
+                    },
+                },
+                "shell_access": {
+                    "type": "object",
+                    "description": "Connection info for the user to access the live shell.",
+                    "properties": {
+                        "method": {
+                            "type": "string",
+                            "description": "Connection method (e.g. 'SSH', 'reverse_shell', 'bind_shell', 'web_shell').",
+                        },
+                        "connection_info": {
+                            "type": "string",
+                            "description": "How to connect (e.g. 'ssh user@10.10.10.5 -p 22' or 'nc -nv 10.10.14.5 4444').",
+                        },
+                    },
                 },
             },
             "required": ["target", "executive_summary", "findings"],

@@ -1,7 +1,8 @@
 """
 tools/report_tool.py — Generates the final penetration test report in Markdown.
 
-Findings are sorted by severity: Critical → High → Medium → Low → Info.
+Findings are sorted by severity: Critical -> High -> Medium -> Low -> Info.
+Supports HTB-specific sections: attack chain, flags, shell proof, privesc.
 """
 from __future__ import annotations
 
@@ -27,6 +28,11 @@ def generate_report(
     findings: List[Dict[str, Any]],
     methodology_notes: Optional[str],
     output_dir: str,
+    flags_captured: Optional[Dict[str, str]] = None,
+    attack_chain: Optional[List[Dict[str, Any]]] = None,
+    shell_proof: Optional[str] = None,
+    privilege_escalation: Optional[Dict[str, str]] = None,
+    shell_access: Optional[Dict[str, str]] = None,
 ) -> str:
     """Write the markdown report to disk and return a JSON status string."""
     os.makedirs(output_dir, exist_ok=True)
@@ -42,7 +48,18 @@ def generate_report(
         key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "Info"), 99),
     )
 
-    md = _render_report(target, executive_summary, sorted_findings, methodology_notes, timestamp)
+    md = _render_report(
+        target,
+        executive_summary,
+        sorted_findings,
+        methodology_notes,
+        timestamp,
+        flags_captured=flags_captured,
+        attack_chain=attack_chain,
+        shell_proof=shell_proof,
+        privilege_escalation=privilege_escalation,
+        shell_access=shell_access,
+    )
 
     with open(report_path, "w", encoding="utf-8") as fh:
         fh.write(md)
@@ -52,6 +69,8 @@ def generate_report(
         "report_path": report_path,
         "finding_count": len(findings),
         "severities": _severity_summary(sorted_findings),
+        "flags_captured": bool(flags_captured),
+        "has_shell_access": bool(shell_access),
     })
 
 
@@ -87,6 +106,11 @@ def _render_report(
     findings: List[Dict],
     methodology_notes: Optional[str],
     timestamp: str,
+    flags_captured: Optional[Dict[str, str]] = None,
+    attack_chain: Optional[List[Dict[str, Any]]] = None,
+    shell_proof: Optional[str] = None,
+    privilege_escalation: Optional[Dict[str, str]] = None,
+    shell_access: Optional[Dict[str, str]] = None,
 ) -> str:
     summary = _severity_summary(findings)
     date_str = datetime.now().strftime("%B %d, %Y %H:%M UTC")
@@ -108,6 +132,26 @@ def _render_report(
         f"",
         f"---",
         f"",
+    ]
+
+    # ---- Attack Chain ------------------------------------------------ #
+    if attack_chain:
+        lines += [
+            f"## Attack Chain",
+            f"",
+            f"| Step | Phase | Action | Result |",
+            f"|------|-------|--------|--------|",
+        ]
+        for step in attack_chain:
+            step_num = step.get("step", "?")
+            phase = step.get("phase", "")
+            action = step.get("action", "")
+            result = step.get("result", "")
+            lines.append(f"| {step_num} | {phase} | {action} | {result} |")
+        lines += ["", "---", ""]
+
+    # ---- Findings Overview ------------------------------------------- #
+    lines += [
         f"## Findings Overview",
         f"",
         f"| Severity | Count |",
@@ -180,6 +224,75 @@ def _render_report(
 
         lines += ["---", ""]
 
+    # ---- Privilege Escalation ---------------------------------------- #
+    if privilege_escalation:
+        vector = privilege_escalation.get("vector", "Unknown")
+        desc = privilege_escalation.get("description", "")
+        evidence = privilege_escalation.get("evidence", "")
+        lines += [
+            f"## Privilege Escalation",
+            f"",
+            f"**Vector:** {vector}",
+            f"",
+            desc,
+            f"",
+        ]
+        if evidence:
+            lines += [
+                f"```",
+                evidence,
+                f"```",
+                f"",
+            ]
+        lines += ["---", ""]
+
+    # ---- Flags Captured ---------------------------------------------- #
+    if flags_captured:
+        user_flag = flags_captured.get("user_flag", "—")
+        root_flag = flags_captured.get("root_flag", "—")
+        lines += [
+            f"## Flags Captured",
+            f"",
+            f"| Flag | Value |",
+            f"|------|-------|",
+            f"| **user.txt** | `{user_flag}` |",
+            f"| **root.txt** | `{root_flag}` |",
+            f"",
+            f"---",
+            f"",
+        ]
+
+    # ---- Shell Proof ------------------------------------------------- #
+    if shell_proof:
+        lines += [
+            f"## Shell Proof",
+            f"",
+            f"```",
+            shell_proof,
+            f"```",
+            f"",
+            f"---",
+            f"",
+        ]
+
+    # ---- Shell Access ------------------------------------------------ #
+    if shell_access:
+        method = shell_access.get("method", "Unknown")
+        conn_info = shell_access.get("connection_info", "")
+        lines += [
+            f"## Shell Access",
+            f"",
+            f"**Method:** {method}",
+            f"",
+            f"```",
+            conn_info,
+            f"```",
+            f"",
+            f"---",
+            f"",
+        ]
+
+    # ---- Methodology Notes ------------------------------------------- #
     if methodology_notes:
         lines += [
             f"## Methodology Notes",

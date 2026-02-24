@@ -22,6 +22,7 @@ from session_log import SessionLogger
 from system_prompt import build_system_prompt
 from tools.definitions import TOOL_DEFINITIONS
 from tools.dispatcher import ToolDispatcher
+from tools.shell_tool import get_active_background_pids
 
 
 class SecurityAgent:
@@ -44,7 +45,7 @@ class SecurityAgent:
         self.report_path: Optional[str] = None
 
     # ------------------------------------------------------------------ #
-    # Public entry point                                                   #
+    # Public API                                                           #
     # ------------------------------------------------------------------ #
 
     def run(self) -> Optional[str]:
@@ -54,27 +55,48 @@ class SecurityAgent:
         Returns the path to the generated report (if any), or None.
         """
         scope_description = self._build_scope_description()
-        system_prompt = build_system_prompt(self.target, scope_description)
+        system_prompt = build_system_prompt(
+            target=self.target,
+            scope_description=scope_description,
+            mode=self.config.agent_mode,
+            lhost=self.config.lhost,
+            lport=self.config.lport,
+        )
+
+        # Determine iteration limit based on mode
+        max_iter = self.config.max_iterations
+        if self.config.agent_mode == "htb" and max_iter <= 30:
+            max_iter = 50
+
+        # HTB mode uses larger max_tokens for complex exploit reasoning
+        max_tokens = 16384 if self.config.agent_mode == "htb" else 8192
 
         # Seed the conversation
-        initial_message = (
-            f"Begin a comprehensive penetration test against: {self.target}. "
-            f"Start with Phase 1 reconnaissance."
-        )
+        if self.config.agent_mode == "htb":
+            initial_message = (
+                f"Begin a full penetration test against HackTheBox target: {self.target}. "
+                f"Goal: root access, capture user.txt and root.txt flags. "
+                f"Start with Phase 1 enumeration."
+            )
+        else:
+            initial_message = (
+                f"Begin a comprehensive penetration test against: {self.target}. "
+                f"Start with Phase 1 reconnaissance."
+            )
         self.messages.append({"role": "user", "content": initial_message})
 
         generate_report_called = False
         stop_reason = "INIT"
 
-        for iteration in range(1, self.config.max_iterations + 1):
+        for iteration in range(1, max_iter + 1):
             self.logger.log_iteration(iteration)
-            print(f"\n[*] Iteration {iteration}/{self.config.max_iterations}", flush=True)
+            print(f"\n[*] Iteration {iteration}/{max_iter}", flush=True)
 
             # ---- Call Claude ----------------------------------------- #
             try:
                 response = self.client.messages.create(
                     model=self.config.claude_model,
-                    max_tokens=8192,
+                    max_tokens=max_tokens,
                     system=system_prompt,
                     tools=TOOL_DEFINITIONS,
                     messages=self.messages,
@@ -198,7 +220,7 @@ class SecurityAgent:
                 break
 
         # ---- Session end -------------------------------------------- #
-        reason = "max_iterations" if iteration >= self.config.max_iterations else stop_reason
+        reason = "max_iterations" if iteration >= max_iter else stop_reason
         self.logger.log_session_end(
             reason=reason,
             iterations_used=iteration,
@@ -211,6 +233,10 @@ class SecurityAgent:
             print("\n[!] Agent stopped without generating a report.", flush=True)
 
         return self.report_path
+
+    def get_active_shells(self) -> List[int]:
+        """Return list of active background process PIDs (e.g. listeners, shells)."""
+        return get_active_background_pids()
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #

@@ -4,6 +4,7 @@ tools/dispatcher.py — Routes Claude tool_use blocks to the correct handler.
 All exceptions (including ScopeViolation) are caught here and returned
 as error JSON so the agent loop NEVER crashes on a tool failure.
 """
+# ruff: noqa: E402
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ from tools.sqlmap_tool import run_sqlmap
 from tools.metasploit_tool import run_metasploit
 from tools.http_tool import run_http_request
 from tools.report_tool import generate_report
+from tools.shell_tool import run_shell_command
 
 
 class ToolDispatcher:
@@ -151,6 +153,17 @@ class ToolDispatcher:
                 dry_run=cfg.dry_run,
             )
 
+        elif tool_name == "shell_command":
+            return run_shell_command(
+                action=inp["action"],
+                command=inp.get("command"),
+                pid=inp.get("pid"),
+                timeout_seconds=int(inp.get("timeout_seconds", cfg.shell_timeout)),
+                working_dir=inp.get("working_dir"),
+                scope=self.scope,
+                dry_run=cfg.dry_run,
+            )
+
         elif tool_name == "generate_report":
             return generate_report(
                 target=inp["target"],
@@ -158,6 +171,11 @@ class ToolDispatcher:
                 findings=inp.get("findings", []),
                 methodology_notes=inp.get("methodology_notes"),
                 output_dir=cfg.output_dir,
+                flags_captured=inp.get("flags_captured"),
+                attack_chain=inp.get("attack_chain"),
+                shell_proof=inp.get("shell_proof"),
+                privilege_escalation=inp.get("privilege_escalation"),
+                shell_access=inp.get("shell_access"),
             )
 
         else:
