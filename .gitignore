@@ -11,3 +11,4 @@ output/
 venv/
 env/
 .claude/
+nmap_full/

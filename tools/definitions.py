@@ -4,10 +4,27 @@ tools/definitions.py — Claude tool JSON schemas for the security agent.
 These 8 definitions are passed in the ``tools`` parameter of every
 ``client.messages.create()`` call so Claude knows what tools are available
 and what parameters each accepts.
+
+OS-aware: The shell_command description adapts based on the host platform.
 """
 from __future__ import annotations
 
+import platform
 from typing import List
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+# OS-specific output filtering hint
+if _IS_WINDOWS:
+    _FILTER_HINT = (
+        "To limit large outputs on Windows, pipe through "
+        "'| findstr /i keyword' or use powershell to select first N lines. "
+        "Do NOT use 'head', 'tail', 'grep', or 'strings' — they do not exist on Windows."
+    )
+else:
+    _FILTER_HINT = (
+        "Pipe through '| head -50' or '| grep -i keyword' to limit large outputs."
+    )
 
 TOOL_DEFINITIONS: List[dict] = [
     # ------------------------------------------------------------------ #
@@ -18,7 +35,9 @@ TOOL_DEFINITIONS: List[dict] = [
         "description": (
             "Run an nmap scan against an authorized target to enumerate open ports, services, "
             "versions, and optionally run NSE vulnerability assessment scripts. "
-            "Returns structured JSON with host/port/service information."
+            "Returns structured JSON with host/port/service information. "
+            "On Windows, the tool automatically handles nmap compatibility "
+            "(uses --unprivileged, falls back to text parsing if XML output crashes)."
         ),
         "input_schema": {
             "type": "object",
@@ -251,7 +270,10 @@ TOOL_DEFINITIONS: List[dict] = [
         "name": "http_request",
         "description": (
             "Send an HTTP request to a URL and return the response. "
-            "Useful for service fingerprinting, verifying findings, and testing specific endpoints."
+            "Useful for service fingerprinting, verifying findings, and testing specific endpoints. "
+            "Binary responses (pcap, images, etc.) are automatically detected and saved to output/downloads/. "
+            "For binary responses, the result includes extracted_strings, credential_hints, and the file path "
+            "instead of garbled binary data."
         ),
         "input_schema": {
             "type": "object",
@@ -324,7 +346,7 @@ TOOL_DEFINITIONS: List[dict] = [
                     "type": "string",
                     "description": (
                         "Shell command to execute (required for run/run_background). "
-                        "Pipe through '| head -50' or '| grep -i keyword' to limit large outputs."
+                        + _FILTER_HINT
                     ),
                 },
                 "pid": {

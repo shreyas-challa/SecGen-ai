@@ -8,12 +8,16 @@ The agent drives through the full pentest lifecycle by:
   4. Appending ALL tool results as a single user message (API requirement)
   5. Repeating until: end_turn with no tool calls, generate_report called,
      or max_iterations reached
+
+Includes duplicate-call detection to prevent wasting iterations on
+repeated tool invocations with identical parameters.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from config import Config
 from llm_client import create_llm_client
@@ -52,6 +56,11 @@ class SecurityAgent:
         self.messages: List[Dict[str, Any]] = []
         self.report_path: Optional[str] = None
         self._last_llm_call: float = 0.0
+
+        # Duplicate call tracking: set of hashes for (tool_name, key_params)
+        self._call_history: Set[str] = set()
+        # Tools that are OK to call repeatedly (background process management, SSH commands)
+        self._repeat_ok_tools = {"check_background", "stop_background", "generate_report"}
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -95,6 +104,7 @@ class SecurityAgent:
 
         generate_report_called = False
         stop_reason = "INIT"
+        iteration = 0
 
         for iteration in range(1, max_iter + 1):
             self.logger.log_iteration(iteration)
@@ -203,6 +213,26 @@ class SecurityAgent:
                     tool_input=tool_input,
                     iteration=iteration,
                 )
+
+                # ---- Duplicate call detection ----
+                if self._is_duplicate_call(tool_name, tool_input):
+                    print(f"    -> DUPLICATE SKIPPED: {tool_name}({_summarize_input(tool_input)})", flush=True)
+                    result_str = json.dumps({
+                        "error": "DUPLICATE_CALL",
+                        "message": (
+                            f"You already called {tool_name} with these exact parameters earlier. "
+                            "The result is the same. Please use the previous result and try a DIFFERENT "
+                            "approach or move to the next phase."
+                        ),
+                        "tool": tool_name,
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result_str,
+                    })
+                    continue
+
                 print(f"    -> Calling: {tool_name}({_summarize_input(tool_input)})", flush=True)
 
                 if self.graph_updater:
@@ -316,6 +346,66 @@ class SecurityAgent:
     def get_active_shells(self) -> List[int]:
         """Return list of active background process PIDs (e.g. listeners, shells)."""
         return get_active_background_pids()
+
+    # ------------------------------------------------------------------ #
+    # Duplicate call detection                                             #
+    # ------------------------------------------------------------------ #
+
+    def _make_call_key(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """Create a stable hash key for a (tool_name, tool_input) pair."""
+        # For run_ssh, the command varies even with same host — allow repeats
+        # For shell_command action=run, the command is the key
+        # For http_request, method+url is the key
+        # For nmap/nuclei/ffuf, target+key_params is the key
+        key_parts = {"tool": tool_name}
+
+        if tool_name == "shell_command":
+            action = tool_input.get("action", "run")
+            if action in ("run_ssh", "run"):
+                key_parts["action"] = action
+                key_parts["command"] = tool_input.get("command", "")
+                key_parts["host"] = tool_input.get("host", "")
+            else:
+                # store_credentials, background ops — use all params
+                key_parts.update(tool_input)
+        elif tool_name == "http_request":
+            key_parts["url"] = tool_input.get("url", "")
+            key_parts["method"] = tool_input.get("method", "GET")
+            key_parts["body"] = tool_input.get("body", "")
+        elif tool_name in ("nmap_scan", "nuclei_scan", "ffuf_scan"):
+            key_parts["target"] = tool_input.get("target", "")
+            key_parts["scan_type"] = tool_input.get("scan_type", "")
+            key_parts["ports"] = tool_input.get("ports", "")
+            key_parts["scan_mode"] = tool_input.get("scan_mode", "")
+        elif tool_name == "sqlmap_scan":
+            key_parts["url"] = tool_input.get("url", "")
+            key_parts["parameter"] = tool_input.get("parameter", "")
+        else:
+            key_parts.update(tool_input)
+
+        raw = json.dumps(key_parts, sort_keys=True)
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def _is_duplicate_call(self, tool_name: str, tool_input: Dict[str, Any]) -> bool:
+        """Check if this exact tool call has been made before."""
+        # Some tools are OK to call repeatedly
+        if tool_name in self._repeat_ok_tools:
+            return False
+
+        # run_ssh with different commands is fine
+        action = tool_input.get("action", "")
+        if tool_name == "shell_command" and action in ("run_ssh", "run"):
+            # Different commands are fine; same command is a duplicate
+            pass
+        if tool_name == "shell_command" and action == "store_credentials":
+            # Re-storing same creds is fine (idempotent)
+            return False
+
+        key = self._make_call_key(tool_name, tool_input)
+        if key in self._call_history:
+            return True
+        self._call_history.add(key)
+        return False
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
