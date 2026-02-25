@@ -4,27 +4,14 @@ tools/definitions.py — Claude tool JSON schemas for the security agent.
 These 8 definitions are passed in the ``tools`` parameter of every
 ``client.messages.create()`` call so Claude knows what tools are available
 and what parameters each accepts.
-
-OS-aware: The shell_command description adapts based on the host platform.
 """
 from __future__ import annotations
 
-import platform
 from typing import List
 
-_IS_WINDOWS = platform.system() == "Windows"
-
-# OS-specific output filtering hint
-if _IS_WINDOWS:
-    _FILTER_HINT = (
-        "To limit large outputs on Windows, pipe through "
-        "'| findstr /i keyword' or use powershell to select first N lines. "
-        "Do NOT use 'head', 'tail', 'grep', or 'strings' — they do not exist on Windows."
-    )
-else:
-    _FILTER_HINT = (
-        "Pipe through '| head -50' or '| grep -i keyword' to limit large outputs."
-    )
+_FILTER_HINT = (
+    "Pipe through '| head -50' or '| grep -i keyword' to limit large outputs."
+)
 
 TOOL_DEFINITIONS: List[dict] = [
     # ------------------------------------------------------------------ #
@@ -35,10 +22,7 @@ TOOL_DEFINITIONS: List[dict] = [
         "description": (
             "Run an nmap scan against an authorized target to enumerate open ports, services, "
             "versions, and optionally run NSE vulnerability assessment scripts. "
-            "Returns structured JSON with host/port/service information. "
-            "WINDOWS LIMITATIONS: -O (OS detection) and -sU (UDP) require Administrator "
-            "and will be rejected — do not use them. Use banner-grabbing for OS fingerprinting. "
-            "Use scan_type='connect' or 'version' for all TCP enumeration."
+            "Returns structured JSON with host/port/service information."
         ),
         "input_schema": {
             "type": "object",
@@ -49,11 +33,12 @@ TOOL_DEFINITIONS: List[dict] = [
                 },
                 "scan_type": {
                     "type": "string",
-                    "enum": ["stealth", "connect", "vuln", "version"],
+                    "enum": ["stealth", "connect", "udp", "vuln", "version"],
                     "description": (
                         "Scan technique shorthand (optional, default 'version'): "
-                        "'stealth' = SYN scan (-sS, falls back to -sT on Windows), "
+                        "'stealth' = SYN scan (-sS), "
                         "'connect' = TCP connect scan (-sT), "
+                        "'udp' = UDP scan (-sU), "
                         "'vuln' = NSE vulnerability scripts (--script=vuln), "
                         "'version' = service/version detection (-sV -sC). "
                         "Do NOT pass raw nmap flags here — use the 'flags' parameter instead."
@@ -70,7 +55,6 @@ TOOL_DEFINITIONS: List[dict] = [
                     "type": "string",
                     "description": (
                         "Raw nmap flags to append, e.g. '-sC -sV -T4' or '--script=ftp-anon'. "
-                        "Do NOT include -O or -sU (require root on Windows). "
                         "Always include '-T4' here for faster scans."
                     ),
                 },
@@ -330,8 +314,7 @@ TOOL_DEFINITIONS: List[dict] = [
             "Use this for service enumeration, configuration checks, running assessment scripts, "
             "downloading public PoC tools, managing listeners, and verifying access. "
             "IMPORTANT: After discovering SSH credentials, always call with action='store_credentials' first. "
-            "Then use action='run_ssh' to execute commands on the target — this uses Paramiko directly "
-            "and works on Windows, Linux, and Mac without requiring sshpass."
+            "Then use action='run_ssh' to execute commands on the target — this uses Paramiko directly."
         ),
         "input_schema": {
             "type": "object",
@@ -342,7 +325,7 @@ TOOL_DEFINITIONS: List[dict] = [
                     "description": (
                         "'run' — execute a local shell command and wait for completion; "
                         "'run_ssh' — run a command on a REMOTE host over SSH using stored credentials "
-                        "(requires host + command; works on all platforms including Windows, no sshpass needed); "
+                        "(requires host + command; uses Paramiko, no sshpass needed); "
                         "'run_background' — start local command in background, return PID; "
                         "'check_background' — read output from background PID; "
                         "'stop_background' — terminate background PID; "

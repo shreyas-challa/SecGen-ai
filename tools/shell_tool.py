@@ -134,12 +134,7 @@ def _action_store_credentials(
         })
     with _ssh_lock:
         _ssh_credentials[host] = {"username": username, "password": password}
-    import platform
-    on_windows = platform.system() == "Windows"
     ssh_hint = (
-        f"Use action='run_ssh' with host='{host}' and command='...' to run commands on the target. "
-        "This uses Paramiko directly and works on all platforms without sshpass."
-        if on_windows else
         f"SSH commands targeting this host will now be auto-wrapped with sshpass. "
         f"You can also use action='run_ssh' with host='{host}' for a cleaner Paramiko-based connection."
     )
@@ -153,20 +148,9 @@ def _action_store_credentials(
 
 def _auto_wrap_ssh(command: str) -> str:
     """
-    On Linux/Mac: wrap SSH commands targeting a host with stored credentials
+    Wrap SSH commands targeting a host with stored credentials
     with sshpass and -o StrictHostKeyChecking=no.
-    On Windows: sshpass is not available.  Add -o BatchMode=yes so OpenSSH
-    fails with 'Permission denied' instead of blocking on a console password
-    prompt that bypasses stdin=DEVNULL.
     """
-    import platform
-    if platform.system() == "Windows":
-        # Prevent OpenSSH from prompting the user for a password through the
-        # Windows console handle (which bypasses stdin=DEVNULL).
-        if re.search(r'\bssh\b', command) and "-o BatchMode" not in command:
-            command = command.replace("ssh ", "ssh -o BatchMode=yes ", 1)
-        return command
-
     if "sshpass" in command:
         return command  # Already wrapped
 
@@ -278,7 +262,7 @@ def _action_run_ssh(
     Credentials can be provided inline (username + password) or looked up from
     the credential store (populated by action='store_credentials').  Inline
     credentials are automatically stored for future run_ssh calls to the same host.
-    Works on Windows, Linux, and Mac — no sshpass required.
+    Works without sshpass.
     """
     if not host:
         return json.dumps({"error": "MISSING_PARAM", "message": "host is required for action=run_ssh"})

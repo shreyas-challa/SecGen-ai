@@ -4,14 +4,8 @@ system_prompt.py — Builds the Claude system prompt for the pentest agent.
 Supports two modes:
   - "htb"     — Thorough 6-phase methodology for CTF lab environments
   - "pentest" — Conservative 4-phase methodology (PoC-only, non-destructive)
-
-OS-aware: Adjusts command examples for Windows vs Linux.
 """
 from __future__ import annotations
-
-import platform
-
-_IS_WINDOWS = platform.system() == "Windows"
 
 
 def build_system_prompt(
@@ -32,44 +26,7 @@ def build_system_prompt(
 
 def _os_commands_section(target: str) -> str:
     """Return OS-specific instructions for the agent."""
-    if _IS_WINDOWS:
-        return f"""
-## IMPORTANT: WINDOWS OPERATING SYSTEM
-
-You are running on **Windows**. Many common Linux commands do NOT exist here.
-You MUST use Windows-compatible alternatives:
-
-**Commands that DO NOT WORK on Windows:**
-- `head`, `tail` — Use PowerShell: `powershell -c "Get-Content file | Select-Object -First 50"`
-- `grep` — Use `findstr /i "pattern" file` or `powershell -c "Select-String -Pattern 'pattern' file"`
-- `strings` — Use `powershell -c "Get-Content -Raw file | Select-String -Pattern '[\\x20-\\x7E]{{4,}}' -AllMatches | ForEach-Object {{ $_.Matches.Value }}"`
-- `cat` — Use `type file` or `powershell -c "Get-Content file"`
-- `wget` — Use `curl -o outfile URL` (curl is available on Windows) or `powershell -c "Invoke-WebRequest -Uri URL -OutFile file"`
-- `sshpass` — **NOT available on Windows**. Use `action='run_ssh'` instead (Paramiko-based, works on all platforms).
-- `nc`, `ncat`, `netcat` — **NOT reliably available on Windows**. Use `curl` for FTP/HTTP probes. Use `action='run_ssh'` for remote shells.
-- `echo "..." >> /etc/hosts` — Use `powershell -c "Add-Content C:\\Windows\\System32\\drivers\\etc\\hosts '{target} hostname'"`
-- `chmod`, `chown` — Not applicable on Windows.
-- `find / -perm ...` — Use `powershell -c "Get-ChildItem -Recurse -Path C:\\ -ErrorAction SilentlyContinue"`
-- `base64` — Use `powershell -c "[Convert]::ToBase64String([IO.File]::ReadAllBytes('file'))"`
-
-**To limit large command output, use:**
-- `command | powershell -c "$input | Select-Object -First 50"` (instead of `| head -50`)
-- `command | findstr /i "keyword"` (instead of `| grep -i keyword`)
-
-**For SSH to the target (after finding credentials):**
-1. FIRST: `shell_command(action="store_credentials", host="{target}", username="USER", password="PASS")`
-2. THEN:  `shell_command(action="run_ssh", host="{target}", command="whoami")`
-   This uses Paramiko (pure Python SSH) — works perfectly on Windows without sshpass.
-   NEVER try to use sshpass on Windows — it does not exist.
-
-**For analyzing binary files (pcap, etc.):**
-- `http_request` will auto-detect binary responses and save them to `output/downloads/`.
-  Check the `extracted_strings` and `credential_hints` fields in the response.
-- For deeper pcap analysis: `python -c "from scapy.all import *; pkts=rdpcap('output/downloads/file.pcap'); [print(bytes(p[Raw]).decode('utf-8','ignore')) for p in pkts if Raw in p]"`
-- Or use tshark if available: `tshark -r output/downloads/file.pcap -Y "ftp || http" -T fields -e text`
-"""
-    else:
-        return f"""
+    return f"""
 ## OPERATING SYSTEM: Linux
 
 **For SSH to the target (after finding credentials):**
@@ -89,16 +46,8 @@ You MUST use Windows-compatible alternatives:
 
 
 def _ssh_section(target: str, lhost: str, lport: int) -> str:
-    """Return SSH/credential-usage instructions that are OS-appropriate."""
-    if _IS_WINDOWS:
-        return f"""
-**SSH Access (Windows — use action='run_ssh' exclusively):**
-1. Store credentials: `shell_command(action="store_credentials", host="{target}", username="USER", password="PASS")`
-2. Run commands on target: `shell_command(action="run_ssh", host="{target}", command="id && cat /home/*/user.txt && sudo -l")`
-3. NEVER use sshpass or interactive ssh on Windows — always use action='run_ssh'.
-"""
-    else:
-        return f"""
+    """Return SSH/credential-usage instructions."""
+    return f"""
 **SSH Access:**
 - Single command: `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "whoami"`
 - Multiple commands: `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "id && cat /home/user/user.txt && sudo -l"`
@@ -125,25 +74,9 @@ def _htb_prompt(target: str, scope_description: str, lhost: str, lport: int) -> 
     os_section = _os_commands_section(target)
     ssh_section = _ssh_section(target, lhost, lport)
 
-    # Output filtering instructions depend on OS
-    if _IS_WINDOWS:
-        filter_instruction = "**Filter large outputs**: Pipe through `| findstr /i keyword` or use `powershell -c \"$input | Select-Object -First 50\"` to avoid overwhelming context."
-    else:
-        filter_instruction = "**Filter large outputs**: Pipe through `| head -50` or `| grep -i keyword` to avoid overwhelming context."
+    filter_instruction = "**Filter large outputs**: Pipe through `| head -50` or `| grep -i keyword` to avoid overwhelming context."
 
-    # Pre-compute OS-conditional strings to avoid backslash-in-fstring issues (pre-3.12)
-    if _IS_WINDOWS:
-        hosts_cmd = (
-            "- `shell_command`: `powershell -c \"Add-Content "
-            "C:\\Windows\\System32\\drivers\\etc\\hosts '"
-            + target + " <hostname>'\"`"
-        )
-        wget_note = "(Linux only -- use curl on Windows)"
-        mysql_note = "(if mysql client is available)"
-    else:
-        hosts_cmd = '- `shell_command`: `echo "' + target + ' <hostname>" >> /etc/hosts`'
-        wget_note = ""
-        mysql_note = ""
+    hosts_cmd = '- `shell_command`: `echo "' + target + ' <hostname>" >> /etc/hosts`'
 
     return f"""## AUTHORIZATION & CONTEXT
 
@@ -173,13 +106,13 @@ The `shell_command` tool does **NOT** support interactive input (no stdin prompt
 - List files: `curl -s ftp://{target}/`
 - List with creds: `curl -s ftp://user:password@{target}/`
 - Download file: `curl -s ftp://user:password@{target}/path/to/file -o localfile`
-- Download recursively: `wget -r -np ftp://user:password@{target}/` {wget_note}
+- Download recursively: `wget -r -np ftp://user:password@{target}/`
 - If you need to pass input to a command via stdin, use the `input_data` parameter (NOT `stdin`).
 
 {ssh_section}
 
 **MySQL/databases (pass query directly):**
-- `mysql -u user -p'password' -h {target} -e "SHOW DATABASES;"` {mysql_note}
+- `mysql -u user -p'password' -h {target} -e "SHOW DATABASES;"`
 
 **General rule:** If a command normally opens an interactive prompt, find the non-interactive flag or pipe the input via the `input_data` parameter.
 
