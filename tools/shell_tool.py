@@ -112,7 +112,7 @@ def run_shell_command(
     elif action == "store_credentials":
         return _action_store_credentials(host, username, password)
     elif action == "run_ssh":
-        return _action_run_ssh(host, command, timeout_seconds, dry_run)
+        return _action_run_ssh(host, command, timeout_seconds, dry_run, username, password)
     else:
         return json.dumps({"error": "INVALID_ACTION", "message": f"Unknown action: {action!r}. Use: run, run_background, run_ssh, check_background, stop_background, store_credentials"})
 
@@ -155,12 +155,17 @@ def _auto_wrap_ssh(command: str) -> str:
     """
     On Linux/Mac: wrap SSH commands targeting a host with stored credentials
     with sshpass and -o StrictHostKeyChecking=no.
-    On Windows: sshpass is not available — return the command unchanged.
-    The run_ssh action should be used instead for password-based SSH on Windows.
+    On Windows: sshpass is not available.  Add -o BatchMode=yes so OpenSSH
+    fails with 'Permission denied' instead of blocking on a console password
+    prompt that bypasses stdin=DEVNULL.
     """
     import platform
     if platform.system() == "Windows":
-        return command  # sshpass unavailable; use action='run_ssh' instead
+        # Prevent OpenSSH from prompting the user for a password through the
+        # Windows console handle (which bypasses stdin=DEVNULL).
+        if re.search(r'\bssh\b', command) and "-o BatchMode" not in command:
+            command = command.replace("ssh ", "ssh -o BatchMode=yes ", 1)
+        return command
 
     if "sshpass" in command:
         return command  # Already wrapped
@@ -264,11 +269,15 @@ def _action_run_ssh(
     command: Optional[str],
     timeout_seconds: int,
     dry_run: bool,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> str:
     """
     Run a single command on a remote host over SSH using Paramiko.
 
-    Uses credentials stored via action='store_credentials'.
+    Credentials can be provided inline (username + password) or looked up from
+    the credential store (populated by action='store_credentials').  Inline
+    credentials are automatically stored for future run_ssh calls to the same host.
     Works on Windows, Linux, and Mac — no sshpass required.
     """
     if not host:
@@ -276,15 +285,23 @@ def _action_run_ssh(
     if not command:
         return json.dumps({"error": "MISSING_PARAM", "message": "command is required for action=run_ssh"})
 
-    with _ssh_lock:
-        creds = _ssh_credentials.get(host)
+    # Inline credentials take priority; fall back to stored creds.
+    if username and password:
+        creds = {"username": username, "password": password}
+        # Auto-store so subsequent run_ssh calls don't need to repeat them.
+        with _ssh_lock:
+            _ssh_credentials[host] = creds
+    else:
+        with _ssh_lock:
+            creds = _ssh_credentials.get(host)
 
     if not creds:
         return json.dumps({
             "error": "NO_CREDENTIALS",
             "message": (
                 f"No credentials stored for {host}. "
-                "Call action='store_credentials' with host, username, and password first."
+                "Either pass username and password directly in this call, "
+                "or first call action='store_credentials' with host, username, and password."
             ),
         })
 
