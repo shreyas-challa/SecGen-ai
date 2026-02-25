@@ -182,14 +182,15 @@ class SecurityAgent:
                     print("[*] Claude finished — report generated.", flush=True)
                     break
                 # Claude wrote a reasoning/summary block without calling any tools.
-                # This happens when the model "thinks out loud" mid-engagement.
-                # Nudge it to continue rather than treating it as a terminal stop.
+                # This is a wasted iteration — force an immediate tool call.
                 print("[*] Claude paused without tool calls — nudging to continue...", flush=True)
                 self.messages.append({
                     "role": "user",
                     "content": (
-                        "Please continue with the next phase of the authorized assessment. "
-                        "Use the available tools to proceed. What is your next step?"
+                        "Your last response contained no tool calls. "
+                        "You MUST call at least one tool RIGHT NOW — do not output text only. "
+                        "Pick the single most valuable next action based on what you know so far "
+                        "and call that tool immediately."
                     ),
                 })
                 continue

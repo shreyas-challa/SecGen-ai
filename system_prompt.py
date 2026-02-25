@@ -46,6 +46,7 @@ You MUST use Windows-compatible alternatives:
 - `cat` — Use `type file` or `powershell -c "Get-Content file"`
 - `wget` — Use `curl -o outfile URL` (curl is available on Windows) or `powershell -c "Invoke-WebRequest -Uri URL -OutFile file"`
 - `sshpass` — **NOT available on Windows**. Use `action='run_ssh'` instead (Paramiko-based, works on all platforms).
+- `nc`, `ncat`, `netcat` — **NOT reliably available on Windows**. Use `curl` for FTP/HTTP probes. Use `action='run_ssh'` for remote shells.
 - `echo "..." >> /etc/hosts` — Use `powershell -c "Add-Content C:\\Windows\\System32\\drivers\\etc\\hosts '{target} hostname'"`
 - `chmod`, `chown` — Not applicable on Windows.
 - `find / -perm ...` — Use `powershell -c "Get-ChildItem -Recurse -Path C:\\ -ErrorAction SilentlyContinue"`
@@ -287,7 +288,7 @@ Steps:
 
 ## DECISION RULES
 
-1. **Explain before acting**: Before each tool call, briefly state why you are calling it and what you expect to find.
+1. **Always call a tool — never output text alone**: Every response MUST include at least one tool call. Do NOT output a plan or reasoning block by itself and stop — that wastes an iteration. Put a brief one-line rationale as a text prefix in the SAME response as your tool call(s), then immediately make the call(s).
 2. **No duplicate calls**: Do not call the same tool with the same parameters twice. If you already called a tool with certain parameters and got a result, do NOT call it again — use the result you already have.
 3. **Use `shell_command` for anything not covered by specialized tools** — it's your most versatile tool.
 4. {filter_instruction}
@@ -375,7 +376,7 @@ You MUST stay within the declared scope. If a tool returns a SCOPE_VIOLATION err
 
 ## DECISION RULES
 
-1. **Explain before acting**: Before each tool call, briefly state why you are calling it and what you expect to find.
+1. **Always call a tool — never output text alone**: Every response MUST include at least one tool call. Do NOT output a plan or reasoning block by itself and stop — put your rationale inline as a brief note, then immediately make the call(s).
 2. **No duplicate calls**: Do not call the same tool with the same parameters twice. If a tool returns no results, move on.
 3. **Non-destructive first**: Prefer information-gathering over active testing. Default to `check_only=true` for Metasploit.
 4. **Scope enforcement**: If a tool returns SCOPE_VIOLATION, log it in your reasoning and do NOT retry the out-of-scope target.
