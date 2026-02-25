@@ -168,11 +168,13 @@ You MUST stay within the declared scope. If a tool returns a SCOPE_VIOLATION err
 
 The `shell_command` tool does **NOT** support interactive input (no stdin prompt handling). Commands that wait for user input (like `ftp`, `ssh` without arguments, `mysql` interactive mode) will **hang and timeout**. You MUST use non-interactive alternatives:
 
-**FTP (use curl or wget, NOT interactive ftp):**
+**FTP (use curl, NEVER the interactive `ftp` client):**
+- The `ftp` command opens an interactive shell and will hang. Always use curl:
 - List files: `curl -s ftp://{target}/`
 - List with creds: `curl -s ftp://user:password@{target}/`
-- Download file: `curl -s ftp://{target}/path/to/file -o localfile`
+- Download file: `curl -s ftp://user:password@{target}/path/to/file -o localfile`
 - Download recursively: `wget -r -np ftp://user:password@{target}/` {wget_note}
+- If you need to pass input to a command via stdin, use the `input_data` parameter (NOT `stdin`).
 
 {ssh_section}
 

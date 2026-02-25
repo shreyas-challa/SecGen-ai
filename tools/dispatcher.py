@@ -198,7 +198,7 @@ class ToolDispatcher:
                 working_dir=inp.get("working_dir"),
                 scope=self.scope,
                 dry_run=cfg.dry_run,
-                input_data=inp.get("input_data"),
+                input_data=inp.get("input_data") or inp.get("stdin"),
                 host=inp.get("host"),
                 username=inp.get("username"),
                 password=inp.get("password"),

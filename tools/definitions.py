@@ -371,7 +371,7 @@ TOOL_DEFINITIONS: List[dict] = [
                 },
                 "input_data": {
                     "type": "string",
-                    "description": "Data to pipe to the command's stdin. Use for commands that read from stdin (e.g. piping a password or script content).",
+                    "description": "Data to pipe to the command's stdin. Use for commands that read from stdin (e.g. piping a password or script content). NOTE: this parameter is named 'input_data', NOT 'stdin'.",
                 },
                 "host": {
                     "type": "string",
