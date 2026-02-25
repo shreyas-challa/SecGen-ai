@@ -72,12 +72,31 @@ class ToolDispatcher:
         cfg = self.config
 
         if tool_name == "nmap_scan":
+            scan_type_val = inp.get("scan_type", "version")
+            # If scan_type looks like raw nmap flags (e.g. "-sC -sV -T4 -p-"),
+            # treat it as extra_flags so the model doesn't lose its intended options.
+            _VALID_SCAN_TYPES = {"stealth", "connect", "udp", "vuln", "version"}
+            if scan_type_val and scan_type_val not in _VALID_SCAN_TYPES:
+                raw_flags = scan_type_val
+                scan_type_val = "version"
+            else:
+                raw_flags = None
+            # Merge all flag-like parameters: extra_flags, flags, options, and
+            # any raw flags recovered from an invalid scan_type value.
+            flag_parts = [
+                f for f in [
+                    inp.get("extra_flags"),
+                    inp.get("flags"),
+                    inp.get("options"),
+                    raw_flags,
+                ] if f
+            ]
+            extra_flags = " ".join(flag_parts) if flag_parts else None
             return run_nmap(
                 target=inp["target"],
-                scan_type=inp.get("scan_type", "version"),
+                scan_type=scan_type_val,
                 ports=inp.get("ports"),
-                # Accept "flags" (natural name the model tends to use) as well as "extra_flags"
-                extra_flags=inp.get("extra_flags") or inp.get("flags"),
+                extra_flags=extra_flags,
                 timeout_seconds=int(inp.get("timeout_seconds", 300)),
                 nmap_path=cfg.nmap_path,
                 scope=self.scope,
@@ -98,8 +117,16 @@ class ToolDispatcher:
             )
 
         elif tool_name == "ffuf_scan":
+            # Accept "url" as alias for "target" — the model sometimes uses this
+            ffuf_target = inp.get("target") or inp.get("url")
+            if not ffuf_target:
+                return json.dumps({
+                    "error": "MISSING_PARAM",
+                    "message": "ffuf_scan requires 'target' (base URL or domain).",
+                    "tool": tool_name,
+                })
             return run_ffuf(
-                target=inp["target"],
+                target=ffuf_target,
                 scan_mode=inp.get("scan_mode", "directory"),
                 wordlist=inp.get("wordlist"),
                 extensions=inp.get("extensions"),

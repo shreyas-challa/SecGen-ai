@@ -83,14 +83,13 @@ class SecurityAgent:
         # Seed the conversation
         if self.config.agent_mode == "htb":
             initial_message = (
-                f"Begin a full penetration test against HackTheBox target: {self.target}. "
-                f"Goal: root access, capture user.txt and root.txt flags. "
-                f"Start with Phase 1 enumeration."
+                f"The authorized HTB lab target is {self.target}. "
+                f"Please begin the security assessment starting with Phase 1 service enumeration."
             )
         else:
             initial_message = (
-                f"Begin a comprehensive penetration test against: {self.target}. "
-                f"Start with Phase 1 reconnaissance."
+                f"The authorized target for this security assessment is {self.target}. "
+                f"Please begin with Phase 1 reconnaissance."
             )
         self.messages.append({"role": "user", "content": initial_message})
 
@@ -179,8 +178,8 @@ class SecurityAgent:
                 self.messages.append({
                     "role": "user",
                     "content": (
-                        "Continue the penetration test. Use your tools to proceed with the next phase. "
-                        "Do NOT stop until you have achieved root access and called generate_report."
+                        "Please continue with the next phase of the authorized assessment. "
+                        "Use the available tools to proceed. What is your next step?"
                     ),
                 })
                 continue

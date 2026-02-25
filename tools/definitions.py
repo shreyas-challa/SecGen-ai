@@ -16,8 +16,8 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "nmap_scan",
         "description": (
-            "Run an nmap scan against a target to enumerate open ports, services, "
-            "versions, and optionally run NSE vulnerability scripts. "
+            "Run an nmap scan against an authorized target to enumerate open ports, services, "
+            "versions, and optionally run NSE vulnerability assessment scripts. "
             "Returns structured JSON with host/port/service information."
         ),
         "input_schema": {
@@ -35,7 +35,7 @@ TOOL_DEFINITIONS: List[dict] = [
                         "'stealth' = SYN scan (-sS), "
                         "'connect' = TCP connect (-sT), "
                         "'udp' = UDP scan (-sU), "
-                        "'vuln' = NSE vuln scripts (--script=vuln), "
+                        "'vuln' = NSE vulnerability assessment scripts (--script=vuln), "
                         "'version' = service/version detection (-sV -sC). "
                         "Ignored if 'flags' covers the same options."
                     ),
@@ -163,7 +163,7 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "sqlmap_scan",
         "description": (
-            "Run sqlmap to test a URL parameter for SQL injection vulnerabilities. "
+            "Run sqlmap to test a URL parameter for SQL injection vulnerabilities in an authorized assessment. "
             "Runs non-interactively (--batch). Returns whether the target is vulnerable "
             "and details of any injection points found."
         ),
@@ -185,7 +185,7 @@ TOOL_DEFINITIONS: List[dict] = [
                 },
                 "risk": {
                     "type": "integer",
-                    "description": "Risk level 1-3 (default 1). Higher = more dangerous payloads.",
+                    "description": "Risk level 1-3 (default 1). Higher = more thorough testing payloads.",
                     "default": 1,
                 },
                 "dump_tables": {
@@ -213,8 +213,8 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "metasploit_run",
         "description": (
-            "Execute a Metasploit Framework module via the msfrpc daemon. "
-            "ALWAYS use check_only=true first to verify exploitability without firing the payload. "
+            "Run a Metasploit Framework module for authorized vulnerability verification. "
+            "ALWAYS use check_only=true first to verify vulnerability status without executing payloads. "
             "Requires msfrpcd to be running (see README)."
         ),
         "input_schema": {
@@ -250,8 +250,8 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "http_request",
         "description": (
-            "Send a raw HTTP request to a URL and return the response. "
-            "Useful for manual fingerprinting, confirming vulnerabilities, and crafting custom PoCs."
+            "Send an HTTP request to a URL and return the response. "
+            "Useful for service fingerprinting, verifying findings, and testing specific endpoints."
         ),
         "input_schema": {
             "type": "object",
@@ -296,11 +296,10 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "shell_command",
         "description": (
-            "Execute shell commands, run remote SSH commands, and manage background processes. "
-            "Use this for anything not covered by specialized tools: running commands on SSH targets, "
-            "setting up reverse shell listeners, compiling exploits, running linpeas, "
-            "enumerating services (smbclient, ftp, etc.), uploading/downloading files, "
-            "and performing privilege escalation. "
+            "Execute shell commands for authorized security assessment tasks. "
+            "Supports local command execution, remote SSH command execution, and background process management. "
+            "Use this for service enumeration, configuration checks, running assessment scripts, "
+            "downloading public PoC tools, managing listeners, and verifying access. "
             "IMPORTANT: After discovering SSH credentials, always call with action='store_credentials' first. "
             "Then use action='run_ssh' to execute commands on the target — this uses Paramiko directly "
             "and works on Windows, Linux, and Mac without requiring sshpass."
