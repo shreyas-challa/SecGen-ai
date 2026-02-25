@@ -224,14 +224,33 @@ class SecurityAgent:
 
                 # Capture report path if generate_report was called
                 if tool_name == "generate_report":
-                    report_called_this_turn = True
-                    generate_report_called = True
                     try:
                         parsed = json.loads(result_str)
-                        self.report_path = parsed.get("report_path")
-                        print(f"    [+] Report written: {self.report_path}", flush=True)
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+
+                    if parsed.get("error"):
+                        # Tool errored (e.g. missing required params) — tell Claude to retry
+                        print(f"    [!] generate_report failed: {parsed.get('message', parsed.get('error'))}", flush=True)
+                        # Overwrite result so Claude sees the error clearly
+                        result_str = json.dumps({
+                            "error": "REPORT_FAILED",
+                            "message": (
+                                f"generate_report failed: {parsed.get('message', parsed.get('error'))}. "
+                                "Required fields: target (string), executive_summary (string), findings (array). "
+                                "Fix the parameters and call generate_report again."
+                            ),
+                        })
+                    else:
+                        report_path = parsed.get("report_path")
+                        flags = parsed.get("flags_captured", False)
+                        if report_path:
+                            self.report_path = report_path
+                            generate_report_called = True
+                            report_called_this_turn = True
+                            print(f"    [+] Report written: {self.report_path}", flush=True)
+                        else:
+                            print(f"    [!] generate_report returned no path — continuing.", flush=True)
 
                 # Truncate large results before storing in message history.
                 # Full output is already in the session log and graph_updater.

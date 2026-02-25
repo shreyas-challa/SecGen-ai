@@ -170,11 +170,19 @@ class ToolDispatcher:
             )
 
         elif tool_name == "generate_report":
+            # Accept common parameter name variants the model may use
+            target = (inp.get("target") or inp.get("title") or inp.get("host") or "unknown")
+            executive_summary = (
+                inp.get("executive_summary")
+                or inp.get("summary")
+                or inp.get("description")
+                or "See findings below."
+            )
             return generate_report(
-                target=inp["target"],
-                executive_summary=inp["executive_summary"],
+                target=target,
+                executive_summary=executive_summary,
                 findings=inp.get("findings", []),
-                methodology_notes=inp.get("methodology_notes"),
+                methodology_notes=inp.get("methodology_notes") or inp.get("recommendations"),
                 output_dir=cfg.output_dir,
                 flags_captured=inp.get("flags_captured"),
                 attack_chain=inp.get("attack_chain"),

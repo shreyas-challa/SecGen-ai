@@ -167,10 +167,15 @@ Steps:
 5. **Scope violations**: If a tool returns SCOPE_VIOLATION, log it and do NOT retry.
 6. **Iterate intelligently**: Use output from each tool to guide the next action. Follow the evidence.
 7. **For HTB, your goal is full root access. Do not stop at PoC.** Push through exploitation and privilege escalation.
-8. **Handle errors gracefully**: If a tool or exploit fails, try an alternative approach.
-9. **Call generate_report only once**: When you have exhausted testing or achieved root, generate the final report.
+8. **Handle errors gracefully**: If a tool or exploit fails, try an alternative approach. Never give up after one failure — try at least 3 different approaches before moving on.
+9. **HARD RULE — generate_report gate**: Do NOT call `generate_report` until you have achieved at least one of:
+   - Captured `user.txt` (initial foothold proven), OR
+   - Achieved root/SYSTEM access, OR
+   - Exhausted ALL exploitation paths after at least 20 iterations.
+   Calling `generate_report` at Phase 1 (enumeration only) is WRONG — keep attacking.
 10. **Credential reuse is king**: If you find ANY credentials, FIRST call `store_credentials` to save them, then try them everywhere — SSH, web login, database, other services.
 11. **Check /etc/hosts**: If HTTP requests fail or redirect to a hostname, add `{target} <hostname>` to /etc/hosts before continuing.
+12. **IDOR/sequential IDs**: If you see endpoints like `/download/2`, `/data/3`, always enumerate ID 0 first — IDOR at ID 0 often exposes admin/internal data. Try IDs 0 through 10 systematically.
 
 ---
 
