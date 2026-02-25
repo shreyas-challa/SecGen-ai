@@ -36,8 +36,9 @@ TOOL_DEFINITIONS: List[dict] = [
             "Run an nmap scan against an authorized target to enumerate open ports, services, "
             "versions, and optionally run NSE vulnerability assessment scripts. "
             "Returns structured JSON with host/port/service information. "
-            "On Windows, the tool automatically handles nmap compatibility "
-            "(uses --unprivileged, falls back to text parsing if XML output crashes)."
+            "WINDOWS LIMITATIONS: -O (OS detection) and -sU (UDP) require Administrator "
+            "and will be rejected — do not use them. Use banner-grabbing for OS fingerprinting. "
+            "Use scan_type='connect' or 'version' for all TCP enumeration."
         ),
         "input_schema": {
             "type": "object",
@@ -48,24 +49,30 @@ TOOL_DEFINITIONS: List[dict] = [
                 },
                 "scan_type": {
                     "type": "string",
-                    "enum": ["stealth", "connect", "udp", "vuln", "version"],
+                    "enum": ["stealth", "connect", "vuln", "version"],
                     "description": (
                         "Scan technique shorthand (optional, default 'version'): "
-                        "'stealth' = SYN scan (-sS), "
-                        "'connect' = TCP connect (-sT), "
-                        "'udp' = UDP scan (-sU), "
-                        "'vuln' = NSE vulnerability assessment scripts (--script=vuln), "
+                        "'stealth' = SYN scan (-sS, falls back to -sT on Windows), "
+                        "'connect' = TCP connect scan (-sT), "
+                        "'vuln' = NSE vulnerability scripts (--script=vuln), "
                         "'version' = service/version detection (-sV -sC). "
-                        "Ignored if 'flags' covers the same options."
+                        "Do NOT pass raw nmap flags here — use the 'flags' parameter instead."
                     ),
                 },
                 "ports": {
                     "type": "string",
-                    "description": "Port specification, e.g. '80,443', '1-1024', '-p-' (all ports). Defaults to top 1000 ports.",
+                    "description": (
+                        "Port specification string, e.g. '80,443', '1-1024', '1-65535' (all ports). "
+                        "Defaults to top 1000 ports. Always pass as a string, not a number."
+                    ),
                 },
                 "flags": {
                     "type": "string",
-                    "description": "Raw nmap flags to append, e.g. '-sC -sV -T4 -p-' or '-sU --top-ports 100 -T4'.",
+                    "description": (
+                        "Raw nmap flags to append, e.g. '-sC -sV -T4' or '--script=ftp-anon'. "
+                        "Do NOT include -O or -sU (require root on Windows). "
+                        "Always include '-T4' here for faster scans."
+                    ),
                 },
                 "timeout_seconds": {
                     "type": "integer",

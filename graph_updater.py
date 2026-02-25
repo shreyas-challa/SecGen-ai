@@ -53,29 +53,89 @@ class GraphUpdater:
         host_id = f"host:{host}"
         self.gs.add_node(host_id, "host", host, {"ip": host, "iteration": iteration})
 
-        # Parse open ports from nmap output
-        # Match lines like: 80/tcp   open  http
-        port_pattern = re.compile(
-            r"(\d+)/(tcp|udp)\s+open\s+(\S+)(?:\s+(.+))?", re.IGNORECASE
-        )
-        for match in port_pattern.finditer(result_str):
-            port = match.group(1)
-            proto = match.group(2)
-            service_name = match.group(3)
-            version_info = (match.group(4) or "").strip()
+        ports_found = self._parse_nmap_ports(result_str, host, host_id, iteration)
 
-            service_id = f"service:{port}/{proto}:{host}"
-            label = f"{service_name.upper()}:{port}"
-            data = {
-                "port": port,
-                "protocol": proto,
-                "service": service_name,
-                "version": version_info,
-                "host": host,
-                "iteration": iteration,
-            }
-            self.gs.add_node(service_id, "service", label, data)
-            self.gs.add_edge(host_id, service_id, "has_service", f"port {port}/{proto}")
+        # Fallback: text regex for any raw nmap output embedded in result
+        # (covers text_fallback mode where raw_output_head is included)
+        if not ports_found:
+            port_pattern = re.compile(
+                r"(\d+)/(tcp|udp)\s+open\s+(\S+)(?:\s+(.+))?", re.IGNORECASE
+            )
+            for match in port_pattern.finditer(result_str):
+                port = match.group(1)
+                proto = match.group(2)
+                service_name = match.group(3)
+                version_info = (match.group(4) or "").strip()
+
+                service_id = f"service:{port}/{proto}:{host}"
+                label = f"{service_name.upper()}:{port}"
+                data = {
+                    "port": port,
+                    "protocol": proto,
+                    "service": service_name,
+                    "version": version_info,
+                    "host": host,
+                    "iteration": iteration,
+                }
+                self.gs.add_node(service_id, "service", label, data)
+                self.gs.add_edge(host_id, service_id, "has_service", f"port {port}/{proto}")
+
+    def _parse_nmap_ports(self, result_str: str, host: str, host_id: str, iteration: int) -> bool:
+        """
+        Parse the structured JSON returned by nmap_tool and create service nodes.
+        Returns True if at least one open port was found and added.
+        """
+        try:
+            result = json.loads(result_str)
+        except (json.JSONDecodeError, ValueError):
+            return False
+
+        if result.get("error") or "hosts" not in result:
+            return False
+
+        found_any = False
+        for nmap_host in result.get("hosts", []):
+            # Use the IP from nmap output if available, otherwise keep the input target
+            nmap_ip = nmap_host.get("ip", "")
+            effective_host = nmap_ip if nmap_ip else host
+
+            # Update host node state if host came up
+            if nmap_host.get("state") == "up":
+                self.gs.add_node(
+                    f"host:{effective_host}", "host", effective_host,
+                    {"ip": effective_host, "state": "up", "iteration": iteration}
+                )
+
+            for port_info in nmap_host.get("ports", []):
+                if port_info.get("state") != "open":
+                    continue
+                port = str(port_info.get("port", ""))
+                proto = port_info.get("protocol", "tcp")
+                service_name = port_info.get("service", "unknown")
+                version_info = port_info.get("version", "")
+
+                if not port:
+                    continue
+
+                service_id = f"service:{port}/{proto}:{effective_host}"
+                label = f"{service_name.upper()}:{port}"
+                data = {
+                    "port": port,
+                    "protocol": proto,
+                    "service": service_name,
+                    "version": version_info,
+                    "host": effective_host,
+                    "iteration": iteration,
+                }
+                self.gs.add_node(service_id, "service", label, data)
+                eff_host_id = f"host:{effective_host}"
+                if not self.gs.has_node(eff_host_id):
+                    self.gs.add_node(eff_host_id, "host", effective_host,
+                                     {"ip": effective_host, "iteration": iteration})
+                self.gs.add_edge(eff_host_id, service_id, "has_service", f"port {port}/{proto}")
+                found_any = True
+
+        return found_any
 
     def _handle_nuclei(self, tool_input: dict, result_str: str, iteration: int) -> None:
         target = tool_input.get("target", "")
@@ -308,6 +368,51 @@ class GraphUpdater:
             if cred_id:
                 self.gs.add_edge(cred_id, access_id, "grants_access", "user")
 
+    def _handle_http_request(self, tool_input: dict, result_str: str, iteration: int) -> None:
+        url = tool_input.get("url", "")
+        host = self._extract_host(url)
+        port = self._extract_port(url)
+        if not host:
+            return
+
+        # Ensure host node exists
+        host_id = f"host:{host}"
+        if not self.gs.has_node(host_id):
+            self.gs.add_node(host_id, "host", host, {"ip": host, "iteration": iteration})
+
+        try:
+            result = json.loads(result_str)
+        except (json.JSONDecodeError, ValueError):
+            return
+
+        # Create credential nodes from PCAP / binary credential_hints
+        credential_hints = result.get("credential_hints", [])
+        username = None
+        password = None
+        for hint in credential_hints:
+            hint_upper = hint.upper()
+            if hint_upper.startswith("USER ") or hint_upper.startswith("LOGIN "):
+                username = hint.split(None, 1)[1] if " " in hint else None
+            elif hint_upper.startswith("PASS ") or hint_upper.startswith("PASSWORD "):
+                password = hint.split(None, 1)[1] if " " in hint else None
+
+        if username:
+            cred_id = f"cred:{username}@{host}"
+            cred_data = {
+                "username": username,
+                "host": host,
+                "has_password": bool(password),
+                "source": "pcap_extraction",
+                "iteration": iteration,
+            }
+            self.gs.add_node(cred_id, "credential", f"{username}@{host}", cred_data)
+            service_id = self._find_service_for_host_port(host, port) or \
+                         self._find_any_service_for_host(host)
+            if service_id:
+                self.gs.add_edge(service_id, cred_id, "yields_cred", f"{username}@{host}")
+            else:
+                self.gs.add_edge(host_id, cred_id, "yields_cred", f"{username}@{host}")
+
     def _handle_generate_report(self, tool_input: dict, result_str: str, iteration: int) -> None:
         """Enrich graph from report fields."""
         try:
@@ -464,5 +569,6 @@ class GraphUpdater:
         "ffuf_scan": _handle_ffuf,
         "sqlmap_scan": _handle_sqlmap,
         "shell_command": _handle_shell_command,
+        "http_request": _handle_http_request,
         "generate_report": _handle_generate_report,
     }

@@ -81,21 +81,29 @@ class ToolDispatcher:
                 scan_type_val = "version"
             else:
                 raw_flags = None
-            # Merge all flag-like parameters: extra_flags, flags, options, and
-            # any raw flags recovered from an invalid scan_type value.
+            # Merge all flag-like parameters: extra_flags, flags, options, timing,
+            # and any raw flags recovered from an invalid scan_type value.
+            # "timing" is a common extra param the model passes (e.g. "-T4") that
+            # isn't in the schema but should be forwarded as a flag.
             flag_parts = [
                 f for f in [
                     inp.get("extra_flags"),
                     inp.get("flags"),
                     inp.get("options"),
+                    inp.get("timing"),
                     raw_flags,
                 ] if f
             ]
             extra_flags = " ".join(flag_parts) if flag_parts else None
+            # Coerce ports to string — the model sometimes passes an integer (e.g. ports=21)
+            # which causes a TypeError in subprocess.
+            ports_val = inp.get("ports")
+            if ports_val is not None:
+                ports_val = str(ports_val)
             return run_nmap(
                 target=inp["target"],
                 scan_type=scan_type_val,
-                ports=inp.get("ports"),
+                ports=ports_val,
                 extra_flags=extra_flags,
                 timeout_seconds=int(inp.get("timeout_seconds", 300)),
                 nmap_path=cfg.nmap_path,

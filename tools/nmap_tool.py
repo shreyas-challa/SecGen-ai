@@ -72,6 +72,37 @@ def run_nmap(
     # Build extra flags list
     extra_list: List[str] = extra_flags.split() if extra_flags else []
 
+    # On Windows: strip flags that always require root/admin and cause nmap to abort
+    # immediately before any scanning.  Return an informative error instead of letting
+    # nmap quit with "requires root privileges" after wasting a full iteration.
+    if _IS_WINDOWS:
+        privileged_flags = {"-O", "--osscan-guess", "--osscan-limit"}
+        stripped = [f for f in extra_list if f not in privileged_flags]
+        if len(stripped) < len(extra_list):
+            removed = set(extra_list) - set(stripped)
+            # Return early with a clear message so Claude doesn't retry the same call
+            return json.dumps({
+                "error": "WINDOWS_PRIVILEGE_REQUIRED",
+                "message": (
+                    f"Flags {sorted(removed)} require Administrator/root on Windows and were not run. "
+                    "Re-run without those flags. "
+                    "Use 'udp' scan_type or skip OS detection — use banner-grabbing instead."
+                ),
+                "stripped_flags": sorted(removed),
+                "hint": "Retry the scan without -O. Service versions (-sV) give sufficient info.",
+            })
+        # Also handle -sU in extra_list (UDP requires raw sockets on Windows)
+        if "-sU" in extra_list:
+            return json.dumps({
+                "error": "WINDOWS_PRIVILEGE_REQUIRED",
+                "message": (
+                    "-sU (UDP scan) requires Administrator/root on Windows. "
+                    "Skip UDP enumeration or run nmap as Administrator."
+                ),
+                "hint": "Use scan_type='connect' or 'version' for TCP enumeration instead.",
+            })
+        extra_list = stripped
+
     # On Windows: add --unprivileged if not running as admin, to avoid crashes
     if _IS_WINDOWS and "--unprivileged" not in extra_list and "--privileged" not in extra_list:
         extra_list.append("--unprivileged")
