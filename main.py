@@ -208,7 +208,7 @@ def main() -> None:
     session_logger = SessionLogger(config.output_dir, target)
 
     print(f"[*] Session log: {session_logger.log_path}")
-    cache_note = " + prompt caching" if config.provider == "openrouter" else " (prompt caching)"
+    cache_note = " + prompt caching" if config.provider in ("openrouter", "dedalus") else " (prompt caching)"
     print(f"[*] Provider: {config.provider}{cache_note} | Model: {config.claude_model}")
     print(f"[*] Max iterations: {config.max_iterations} (HTB mode may auto-increase to 50)")
     print(f"[*] Agent mode: {config.agent_mode}")

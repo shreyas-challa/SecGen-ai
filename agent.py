@@ -44,11 +44,10 @@ class SecurityAgent:
         self.dispatcher = ToolDispatcher(config, scope, session_logger)
 
         # Create the LLM client based on provider config
-        api_key = (
-            config.openrouter_api_key
-            if config.provider == "openrouter"
-            else config.anthropic_api_key
-        )
+        api_key = {
+            "openrouter": config.openrouter_api_key,
+            "dedalus": config.dedalus_api_key,
+        }.get(config.provider, config.anthropic_api_key)
         self.llm = create_llm_client(config.provider, api_key)
         self.messages: List[Dict[str, Any]] = []
         self.report_path: Optional[str] = None

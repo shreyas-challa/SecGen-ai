@@ -13,9 +13,10 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Config:
     # LLM Provider
-    provider: str               # "anthropic" or "openrouter"
+    provider: str               # "anthropic", "openrouter", or "dedalus"
     anthropic_api_key: str
     openrouter_api_key: str
+    dedalus_api_key: str
     claude_model: str
 
     # Metasploit RPC
@@ -80,10 +81,16 @@ def load_config() -> Config:
     provider = os.getenv("PROVIDER", "anthropic").lower().strip()
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+    dedalus_key = os.getenv("DEDALUS_API_KEY", "")
 
     if provider == "openrouter" and not openrouter_key:
         raise EnvironmentError(
             "PROVIDER=openrouter but OPENROUTER_API_KEY is not set. "
+            "Set it in .env or switch PROVIDER to anthropic."
+        )
+    if provider == "dedalus" and not dedalus_key:
+        raise EnvironmentError(
+            "PROVIDER=dedalus but DEDALUS_API_KEY is not set. "
             "Set it in .env or switch PROVIDER to anthropic."
         )
     if provider == "anthropic" and not anthropic_key:
@@ -96,19 +103,27 @@ def load_config() -> Config:
     # Default model depends on provider
     default_model = (
         "anthropic/claude-sonnet-4-6"
-        if provider == "openrouter"
+        if provider in ("openrouter", "dedalus")
         else "claude-sonnet-4-6"
     )
 
     claude_model = os.getenv("CLAUDE_MODEL", default_model)
-    # Strip OpenRouter-style "anthropic/" prefix when using the Anthropic provider directly
+    # Strip "anthropic/" prefix when using the Anthropic provider directly
     if provider == "anthropic" and claude_model.startswith("anthropic/"):
         claude_model = claude_model[len("anthropic/"):]
+
+    # Resolve the active API key for the selected provider
+    active_key = {
+        "anthropic": anthropic_key,
+        "openrouter": openrouter_key,
+        "dedalus": dedalus_key,
+    }.get(provider, anthropic_key)
 
     return Config(
         provider=provider,
         anthropic_api_key=anthropic_key,
         openrouter_api_key=openrouter_key,
+        dedalus_api_key=dedalus_key,
         claude_model=claude_model,
 
         msf_host=os.getenv("MSF_HOST", "127.0.0.1"),

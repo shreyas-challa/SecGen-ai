@@ -251,14 +251,14 @@ class AnthropicProvider:
 
 
 class OpenRouterProvider:
-    """OpenRouter API client with prompt caching for Anthropic/Claude models."""
+    """OpenAI-compatible provider client (OpenRouter, Dedalus Labs, etc.)."""
 
     _ANTHROPIC_BETA = ["prompt-caching-2024-07-31"]
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, base_url: str = "https://openrouter.ai/api/v1") -> None:
         from openai import OpenAI
         self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url=base_url,
             api_key=api_key,
         )
         self._openai = __import__("openai")
@@ -363,10 +363,12 @@ def create_llm_client(provider: str, api_key: str) -> Any:
     """
     Create an LLM client for the given provider.
 
-    provider: "anthropic" or "openrouter"
+    provider: "anthropic", "openrouter", or "dedalus"
     api_key: the API key for that provider
     """
     if provider == "openrouter":
-        return OpenRouterProvider(api_key)
+        return OpenRouterProvider(api_key, base_url="https://openrouter.ai/api/v1")
+    elif provider == "dedalus":
+        return OpenRouterProvider(api_key, base_url="https://api.dedaluslabs.ai/v1")
     else:
         return AnthropicProvider(api_key)
