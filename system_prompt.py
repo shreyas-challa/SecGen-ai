@@ -96,8 +96,10 @@ The `shell_command` tool does **NOT** support interactive input (no stdin prompt
 
 ### Phase 3 — Exploitation
 **Goal: Get a shell on the target.**
-1. **If you found credentials**, try SSH first — it's the easiest path:
-   - `sshpass -p 'password' ssh -o StrictHostKeyChecking=no user@{target} "id"`
+1. **If you found credentials**, IMMEDIATELY store them for automatic SSH wrapping:
+   - First: `shell_command(action="store_credentials", host="{target}", username="USER", password="PASS")`
+   - Then simply use: `shell_command(action="run", command='ssh USER@{target} "id"')`
+   - The system will auto-wrap with sshpass — you do NOT need to add sshpass yourself.
    - If that works, you have a shell! Skip reverse shells and proceed to Phase 4.
 2. Exploit the most promising vulnerability using `shell_command`:
    - Download/compile public exploits from searchsploit or GitHub
@@ -112,9 +114,10 @@ The `shell_command` tool does **NOT** support interactive input (no stdin prompt
 4. Verify shell access: run `whoami`, `id`, `hostname`.
 
 ### Phase 4 — Post-Exploitation & Privilege Escalation
-Run all commands on the target via SSH (or reverse shell). For SSH with credentials:
-- Pattern: `sshpass -p 'PASS' ssh -o StrictHostKeyChecking=no USER@{target} "COMMAND"`
-- Chain multiple: `sshpass -p 'PASS' ssh -o StrictHostKeyChecking=no USER@{target} "cmd1 && cmd2 && cmd3"`
+Run all commands on the target via SSH (or reverse shell). If you stored credentials in Phase 3, SSH is auto-wrapped:
+- Single command: `ssh USER@{target} "COMMAND"`
+- Chain multiple: `ssh USER@{target} "cmd1 && cmd2 && cmd3"`
+- (No need for sshpass — it's added automatically when credentials are stored)
 
 Steps:
 1. **Gather system info**: `whoami`, `id`, `hostname`, `uname -a`, `cat /etc/os-release`
@@ -166,7 +169,7 @@ Steps:
 7. **For HTB, your goal is full root access. Do not stop at PoC.** Push through exploitation and privilege escalation.
 8. **Handle errors gracefully**: If a tool or exploit fails, try an alternative approach.
 9. **Call generate_report only once**: When you have exhausted testing or achieved root, generate the final report.
-10. **Credential reuse is king**: If you find ANY credentials, try them everywhere — SSH, web login, database, other services.
+10. **Credential reuse is king**: If you find ANY credentials, FIRST call `store_credentials` to save them, then try them everywhere — SSH, web login, database, other services.
 11. **Check /etc/hosts**: If HTTP requests fail or redirect to a hostname, add `{target} <hostname>` to /etc/hosts before continuing.
 
 ---

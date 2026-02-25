@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass
@@ -155,12 +157,35 @@ def _anthropic_messages_to_openai(messages: List[Dict], system: str) -> List[Dic
 # ------------------------------------------------------------------ #
 
 class AnthropicProvider:
-    """Direct Anthropic API client."""
+    """Direct Anthropic API client with prompt caching."""
 
     def __init__(self, api_key: str) -> None:
         import anthropic
         self.client = anthropic.Anthropic(api_key=api_key)
         self._anthropic = anthropic
+
+    def _with_cache_control(self, system: str, tools: List[Dict]) -> tuple:
+        """
+        Add cache_control breakpoints to system prompt and the last tool definition.
+
+        Anthropic caches all content up to and including each cache_control marker.
+        By marking the system prompt and the last tool, we cache ~5K tokens that
+        are identical across every iteration of the agent loop.
+        """
+        cached_system = [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        # Deep-copy the last tool and add cache_control to it
+        cached_tools = list(tools)
+        if cached_tools:
+            cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+
+        return cached_system, cached_tools
 
     def call(
         self,
@@ -171,22 +196,33 @@ class AnthropicProvider:
         messages: List[Dict],
         max_retries: int = 5,
     ) -> LLMResponse:
+        cached_system, cached_tools = self._with_cache_control(system, tools)
+
         for attempt in range(max_retries + 1):
             try:
                 response = self.client.messages.create(
                     model=model,
                     max_tokens=max_tokens,
-                    system=system,
-                    tools=tools,
+                    system=cached_system,
+                    tools=cached_tools,
                     messages=messages,
                 )
+
+                # Extract cache metrics if available
+                usage_kwargs = {
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                }
+                cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+                cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+                if cache_creation or cache_read:
+                    usage_kwargs["cache_creation_input_tokens"] = cache_creation
+                    usage_kwargs["cache_read_input_tokens"] = cache_read
+
                 return LLMResponse(
                     content=response.content,
                     stop_reason=response.stop_reason,
-                    usage=Usage(
-                        input_tokens=response.usage.input_tokens,
-                        output_tokens=response.usage.output_tokens,
-                    ),
+                    usage=Usage(**usage_kwargs),
                 )
             except self._anthropic.RateLimitError:
                 if attempt == max_retries:

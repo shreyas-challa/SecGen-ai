@@ -28,6 +28,10 @@ _MAX_OUTPUT_BYTES = 10 * 1024  # 10 KB
 _background_processes: Dict[int, Dict[str, Any]] = {}
 _bg_lock = threading.Lock()
 
+# SSH credential store: {host: {"username": str, "password": str}}
+_ssh_credentials: Dict[str, Dict[str, str]] = {}
+_ssh_lock = threading.Lock()
+
 
 def _cleanup_background_processes() -> None:
     """Kill all background processes on interpreter exit."""
@@ -88,6 +92,9 @@ def run_shell_command(
     scope: Optional[ScopeEnforcer] = None,
     dry_run: bool = False,
     input_data: Optional[str] = None,
+    host: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> str:
     """
     Execute shell commands or manage background processes.
@@ -102,13 +109,80 @@ def run_shell_command(
         return _action_check_background(pid)
     elif action == "stop_background":
         return _action_stop_background(pid)
+    elif action == "store_credentials":
+        return _action_store_credentials(host, username, password)
     else:
-        return json.dumps({"error": "INVALID_ACTION", "message": f"Unknown action: {action!r}. Use: run, run_background, check_background, stop_background"})
+        return json.dumps({"error": "INVALID_ACTION", "message": f"Unknown action: {action!r}. Use: run, run_background, check_background, stop_background, store_credentials"})
 
 
 # ------------------------------------------------------------------ #
 # Action handlers                                                      #
 # ------------------------------------------------------------------ #
+
+def _action_store_credentials(
+    host: Optional[str],
+    username: Optional[str],
+    password: Optional[str],
+) -> str:
+    """Store SSH/service credentials for a target host for automatic reuse."""
+    if not host or not username or not password:
+        return json.dumps({
+            "error": "MISSING_PARAM",
+            "message": "host, username, and password are all required for action=store_credentials",
+        })
+    with _ssh_lock:
+        _ssh_credentials[host] = {"username": username, "password": password}
+    return json.dumps({
+        "status": "stored",
+        "host": host,
+        "username": username,
+        "message": (
+            f"Credentials stored for {username}@{host}. "
+            f"SSH commands targeting this host will now be auto-wrapped with sshpass."
+        ),
+    })
+
+
+def _auto_wrap_ssh(command: str) -> str:
+    """
+    If the command is an SSH invocation targeting a host with stored credentials,
+    wrap it with sshpass and add -o StrictHostKeyChecking=no automatically.
+
+    Handles patterns like:
+      ssh user@host "cmd"
+      ssh -o Something user@host "cmd"
+    Does NOT wrap if the command already contains 'sshpass'.
+    """
+    if "sshpass" in command:
+        return command  # Already wrapped
+
+    # Match: ssh [options] user@host ...
+    ssh_match = re.match(
+        r'^(ssh\s+(?:-\S+\s+)*)(\S+)@(\S+)(.*)', command
+    )
+    if not ssh_match:
+        return command
+
+    _prefix, user, host, rest = ssh_match.groups()
+
+    # Strip any trailing port or whitespace from host (e.g. host:port)
+    host_clean = host.split(":")[0].strip()
+
+    with _ssh_lock:
+        creds = _ssh_credentials.get(host_clean)
+
+    if not creds:
+        return command  # No stored creds for this host
+
+    # Build sshpass-wrapped command
+    passwd = creds["password"]
+    # Ensure StrictHostKeyChecking=no is present
+    strict_flag = "-o StrictHostKeyChecking=no"
+    if strict_flag not in command:
+        return f"sshpass -p '{passwd}' ssh {strict_flag} {user}@{host}{rest}"
+    else:
+        return f"sshpass -p '{passwd}' {command}"
+
 
 def _action_run(
     command: Optional[str],
@@ -120,6 +194,9 @@ def _action_run(
 ) -> str:
     if not command:
         return json.dumps({"error": "MISSING_PARAM", "message": "command is required for action=run"})
+
+    # Auto-wrap SSH commands with stored credentials
+    command = _auto_wrap_ssh(command)
 
     if scope:
         _check_scope(command, scope)

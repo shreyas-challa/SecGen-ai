@@ -117,6 +117,11 @@ class SecurityAgent:
                 "input_tokens": response.usage.input_tokens,
                 "output_tokens": response.usage.output_tokens,
             }
+            # Include cache metrics when available (Anthropic provider only)
+            if response.usage.cache_creation_input_tokens:
+                usage["cache_creation_input_tokens"] = response.usage.cache_creation_input_tokens
+            if response.usage.cache_read_input_tokens:
+                usage["cache_read_input_tokens"] = response.usage.cache_read_input_tokens
 
             # Serialize content for logging / message history
             content_blocks = _serialize_content(response.content)
@@ -130,9 +135,15 @@ class SecurityAgent:
                 usage=usage,
             )
 
+            # Build usage display string
+            usage_str = f"in={usage['input_tokens']} out={usage['output_tokens']}"
+            if usage.get("cache_read_input_tokens"):
+                usage_str += f" cache_read={usage['cache_read_input_tokens']}"
+            if usage.get("cache_creation_input_tokens"):
+                usage_str += f" cache_create={usage['cache_creation_input_tokens']}"
+
             print(
-                f"    stop_reason={stop_reason}  "
-                f"in={usage['input_tokens']} out={usage['output_tokens']}",
+                f"    stop_reason={stop_reason}  {usage_str}",
                 flush=True,
             )
 

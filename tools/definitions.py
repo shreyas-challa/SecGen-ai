@@ -300,19 +300,25 @@ TOOL_DEFINITIONS: List[dict] = [
             "set up reverse shell listeners, compile exploits, run linpeas, "
             "enumerate services (smbclient, ftp, etc.), upload/download files, "
             "and perform privilege escalation. "
-            "Supports foreground execution and background process management."
+            "Supports foreground execution, background process management, "
+            "and SSH credential storage. "
+            "IMPORTANT: After discovering SSH credentials, call with action='store_credentials' "
+            "to store them. All subsequent SSH commands will be auto-wrapped with sshpass — "
+            "you can then use plain 'ssh user@host \"command\"' syntax without sshpass."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "run_background", "check_background", "stop_background"],
+                    "enum": ["run", "run_background", "check_background", "stop_background", "store_credentials"],
                     "description": (
                         "'run' — execute and wait for completion; "
                         "'run_background' — start in background, return PID; "
                         "'check_background' — read output from background PID; "
-                        "'stop_background' — terminate background PID."
+                        "'stop_background' — terminate background PID; "
+                        "'store_credentials' — save SSH creds for a host (requires host, username, password). "
+                        "After storing, all 'ssh user@host' commands are auto-wrapped with sshpass."
                     ),
                 },
                 "command": {
@@ -338,6 +344,18 @@ TOOL_DEFINITIONS: List[dict] = [
                 "input_data": {
                     "type": "string",
                     "description": "Data to pipe to the command's stdin. Use for commands that read from stdin (e.g. piping a password or script content).",
+                },
+                "host": {
+                    "type": "string",
+                    "description": "Target host IP/hostname (required for store_credentials).",
+                },
+                "username": {
+                    "type": "string",
+                    "description": "SSH username (required for store_credentials).",
+                },
+                "password": {
+                    "type": "string",
+                    "description": "SSH password (required for store_credentials).",
                 },
             },
             "required": ["action"],

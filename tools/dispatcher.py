@@ -163,6 +163,9 @@ class ToolDispatcher:
                 scope=self.scope,
                 dry_run=cfg.dry_run,
                 input_data=inp.get("input_data"),
+                host=inp.get("host"),
+                username=inp.get("username"),
+                password=inp.get("password"),
             )
 
         elif tool_name == "generate_report":
