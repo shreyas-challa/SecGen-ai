@@ -46,6 +46,11 @@ class Config:
     max_iterations: int
     dry_run: bool
 
+    # Context management — prevents runaway token costs and rate limits
+    max_tool_result_chars: int  # Truncate tool results in history (0 = unlimited)
+    max_history_turns: int      # Keep only last N assistant+user pairs (0 = unlimited)
+    min_iter_delay: float       # Minimum seconds between LLM calls (helps Anthropic TPM limits)
+
     # Scope (comma-separated list of IPs, CIDR ranges, or domain strings)
     allowed_scope: List[str]
 
@@ -90,16 +95,21 @@ def load_config() -> Config:
 
     # Default model depends on provider
     default_model = (
-        "anthropic/claude-sonnet-4"
+        "anthropic/claude-sonnet-4-6"
         if provider == "openrouter"
         else "claude-sonnet-4-6"
     )
+
+    claude_model = os.getenv("CLAUDE_MODEL", default_model)
+    # Strip OpenRouter-style "anthropic/" prefix when using the Anthropic provider directly
+    if provider == "anthropic" and claude_model.startswith("anthropic/"):
+        claude_model = claude_model[len("anthropic/"):]
 
     return Config(
         provider=provider,
         anthropic_api_key=anthropic_key,
         openrouter_api_key=openrouter_key,
-        claude_model=os.getenv("CLAUDE_MODEL", default_model),
+        claude_model=claude_model,
 
         msf_host=os.getenv("MSF_HOST", "127.0.0.1"),
         msf_port=_int("MSF_PORT", 55553),
@@ -128,6 +138,9 @@ def load_config() -> Config:
         shell_timeout=_int("SHELL_TIMEOUT", 120),
         max_iterations=_int("MAX_ITERATIONS", 30),
         dry_run=_bool("DRY_RUN", False),
+        max_tool_result_chars=_int("MAX_TOOL_RESULT_CHARS", 8000),
+        max_history_turns=_int("MAX_HISTORY_TURNS", 20),
+        min_iter_delay=float(os.getenv("MIN_ITER_DELAY", "0")),
 
         allowed_scope=_list("ALLOWED_SCOPE"),
         output_dir=os.getenv("OUTPUT_DIR", "./output"),

@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Attack Surface Graph — Security Agent</title>
+  <!-- Cytoscape + fcose physics layout (gravity & repulsion) -->
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
+  <script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
+  <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #12121e;
+      --bg2:     #0f0f1e;
+      --bg3:     #0a0a18;
+      --border:  #2a2a4e;
+      --border2: #1e1e3a;
+      --text:    #e0e0e0;
+      --muted:   #666688;
+      --accent:  #7986cb;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', 'Consolas', monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-size: 12px;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Top bar                                                           */
+    /* ---------------------------------------------------------------- */
+    #topbar {
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 7px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+      height: 38px;
+    }
+    #topbar h1 {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .spacer { flex: 1; }
+    .tb-btn {
+      background: var(--border2);
+      border: 1px solid var(--border);
+      color: #b0b0d0;
+      padding: 3px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: inherit;
+      transition: background 0.12s, color 0.12s;
+    }
+    .tb-btn:hover { background: #2a2a5e; color: #fff; }
+
+    /* ---------------------------------------------------------------- */
+    /* Main area                                                         */
+    /* ---------------------------------------------------------------- */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Graph canvas                                                      */
+    /* ---------------------------------------------------------------- */
+    #cy {
+      flex: 1;
+      background: var(--bg);
+      min-width: 0;
+    }
+
+    /* ---------------------------------------------------------------- */
+    /* Right panel                                                       */
+    /* ---------------------------------------------------------------- */
+    #panel {
+      width: 310px;
+      flex-shrink: 0;
+      background: var(--bg2);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Panel section headers */
+    .panel-header {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 8px 12px 5px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .panel-header .ph-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* ---- Phases stepper ---- */
+    #phases-section {
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #phases-stepper {
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      gap: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    #phases-stepper::-webkit-scrollbar { display: none; }
+    .phase-step {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .phase-dot {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--bg3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--muted);
+      flex-shrink: 0;
+      transition: all 0.3s;
+    }
+    .phase-label {
+      font-size: 9px;
+      color: var(--muted);
+      transition: color 0.3s;
+    }
+    .phase-connector {
+      width: 16px; height: 1px;
+      background: var(--border);
+      flex-shrink: 0;
+      margin: 0 2px;
+    }
+    /* Phase states */
+    .phase-step.done .phase-dot {
+      background: #1b3a1b; border-color: #2e7d32; color: #66bb6a;
+    }
+    .phase-step.done .phase-label { color: #66bb6a; }
+    .phase-step.active .phase-dot {
+      background: #1a237e; border-color: var(--accent); color: #fff;
+      box-shadow: 0 0 8px #3949ab66;
+    }
+    .phase-step.active .phase-label { color: #fff; font-weight: 700; }
+    .phase-step.done .phase-connector { background: #2e7d32; }
+
+    /* Current tool badge */
+    #current-tool-badge {
+      padding: 4px 12px 8px;
+      font-size: 10px;
+      color: var(--muted);
+      min-height: 22px;
+    }
+    #current-tool-badge .tool-name {
+      color: #ffa726;
+      font-weight: 600;
+    }
+
+    /* ---- Activity log ---- */
+    #activity-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+    #activity-log {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    #activity-log::-webkit-scrollbar { width: 4px; }
+    #activity-log::-webkit-scrollbar-track { background: transparent; }
+    #activity-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-entry {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      padding: 4px 12px;
+      transition: background 0.1s;
+    }
+    .log-entry:hover { background: #ffffff08; }
+    .log-time {
+      color: var(--muted);
+      font-size: 10px;
+      flex-shrink: 0;
+      width: 38px;
+      padding-top: 1px;
+    }
+    .log-icon {
+      width: 14px; height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      margin-top: 1px;
+    }
+    .log-text {
+      color: #c0c0d8;
+      font-size: 11px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .log-text strong { color: #e8e8f8; font-weight: 600; }
+
+    /* Log type colors */
+    .log-tool  .log-icon { background: #1a237e44; color: var(--accent); }
+    .log-host  .log-icon { background: #0d47a144; color: #64b5f6; }
+    .log-svc   .log-icon { background: #00695c44; color: #4db6ac; }
+    .log-vuln  .log-icon { background: #b71c1c44; color: #ef9a9a; }
+    .log-cred  .log-icon { background: #1b5e2044; color: #a5d6a7; }
+    .log-access .log-icon { background: #e65100aa; color: #ffcc80; }
+    .log-info  .log-icon { background: transparent; color: var(--muted); }
+
+    /* ---- Node details ---- */
+    #details-section {
+      flex-shrink: 0;
+      max-height: 220px;
+      border-top: 1px solid var(--border);
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    #details-section::-webkit-scrollbar { width: 4px; }
+    #details-section::-webkit-scrollbar-thumb { background: var(--border); }
+    #node-details { padding: 8px 12px 10px; }
+    .detail-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 5px;
+      line-height: 1.4;
+    }
+    .detail-key { color: #9fa8da; min-width: 70px; font-weight: 600; flex-shrink: 0; font-size: 11px; }
+    .detail-val { color: #cfd8dc; word-break: break-all; font-size: 11px; }
+    .type-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    #details-empty { color: var(--muted); font-style: italic; padding: 10px 0; text-align: center; font-size: 11px; }
+
+    /* ---------------------------------------------------------------- */
+    /* Status bar                                                        */
+    /* ---------------------------------------------------------------- */
+    #statusbar {
+      background: var(--bg3);
+      border-top: 1px solid var(--border);
+      padding: 4px 14px;
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+    }
+    .stat-item span { color: #c0c0e0; font-weight: 600; }
+    .live-dot { animation: blink 1.5s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+    /* ---------------------------------------------------------------- */
+    /* Legend overlay                                                    */
+    /* ---------------------------------------------------------------- */
+    #legend {
+      display: none;
+      position: absolute;
+      top: 44px; right: 318px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 11px;
+      z-index: 200;
+      min-width: 210px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.6);
+    }
+    #legend.visible { display: block; }
+    #legend h3 { color: var(--accent); font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; margin-top: 8px; }
+    #legend h3:first-child { margin-top: 0; }
+    .lg-item { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; color: #b0b0c8; }
+    .lg-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+    .lg-line { width: 22px; height: 2px; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div id="topbar">
+  <h1>Attack Surface Graph</h1>
+  <div class="spacer"></div>
+  <button class="tb-btn" onclick="fitGraph()">Fit  [Ctrl+F]</button>
+  <button class="tb-btn" onclick="toggleLegend()">Legend</button>
+</div>
+
+<!-- Legend -->
+<div id="legend">
+  <h3>Nodes</h3>
+  <div class="lg-item"><div class="lg-swatch" style="background:#1565C0"></div> Host</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#00838F"></div> Service</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#B71C1C"></div> Vuln (Critical)</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#E65100"></div> Vuln (High)</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#F9A825"></div> Vuln (Medium)</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#0277BD"></div> Vuln (Low/Info)</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#2E7D32"></div> Credential</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#F57F17"></div> Access (Root)</div>
+  <div class="lg-item"><div class="lg-swatch" style="background:#7B1FA2"></div> Access (User)</div>
+  <h3>Edges</h3>
+  <div class="lg-item"><div class="lg-line" style="background:#9E9E9E"></div> has_service</div>
+  <div class="lg-item"><div class="lg-line" style="background:#EF5350"></div> exposes_vuln</div>
+  <div class="lg-item"><div class="lg-line" style="background:#66BB6A;background:repeating-linear-gradient(90deg,#66BB6A 0,#66BB6A 4px,transparent 4px,transparent 8px)"></div> yields_cred</div>
+  <div class="lg-item"><div class="lg-line" style="background:#FFA726"></div> grants_access</div>
+  <div class="lg-item"><div class="lg-line" style="background:repeating-linear-gradient(90deg,#AB47BC 0,#AB47BC 3px,transparent 3px,transparent 7px)"></div> lateral_movement</div>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <div id="cy"></div>
+
+  <!-- Right panel -->
+  <div id="panel">
+
+    <!-- Phases -->
+    <div id="phases-section">
+      <div class="panel-header"><div class="ph-dot"></div> Phases</div>
+      <div id="phases-stepper">
+        <div class="phase-step active" data-phase="Reconnaissance">
+          <div class="phase-dot">1</div>
+          <div class="phase-label">Recon</div>
+        </div>
+        <div class="phase-connector"></div>
+        <div class="phase-step" data-phase="Enumeration">
+          <div class="phase-dot">2</div>
+          <div class="phase-label">Enum</div>
+        </div>
+        <div class="phase-connector"></div>
+        <div class="phase-step" data-phase="Exploitation">
+          <div class="phase-dot">3</div>
+          <div class="phase-label">Exploit</div>
+        </div>
+        <div class="phase-connector"></div>
+        <div class="phase-step" data-phase="Post-Exploitation">
+          <div class="phase-dot">4</div>
+          <div class="phase-label">Post-Exploit</div>
+        </div>
+        <div class="phase-connector"></div>
+        <div class="phase-step" data-phase="Reporting">
+          <div class="phase-dot">5</div>
+          <div class="phase-label">Report</div>
+        </div>
+      </div>
+      <div id="current-tool-badge">Waiting for agent...</div>
+    </div>
+
+    <!-- Activity log -->
+    <div id="activity-section">
+      <div class="panel-header"><div class="ph-dot"></div> Activity</div>
+      <div id="activity-log"></div>
+    </div>
+
+    <!-- Node details -->
+    <div id="details-section">
+      <div class="panel-header"><div class="ph-dot"></div> Node Details</div>
+      <div id="node-details">
+        <div id="details-empty">Click a node to inspect it</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Status bar -->
+<div id="statusbar">
+  <div class="stat-item">Iter <span id="stat-iter">0</span></div>
+  <div class="stat-item">Nodes <span id="stat-nodes">0</span></div>
+  <div class="stat-item">Edges <span id="stat-edges">0</span></div>
+  <div class="stat-item">Target <span id="stat-target">—</span></div>
+  <div class="spacer"></div>
+  <div id="live-indicator" class="live-dot" style="color:#66bb6a">LIVE</div>
+</div>
+
+<script>
+'use strict';
+
+// ------------------------------------------------------------------ //
+// Node / edge style helpers                                           //
+// ------------------------------------------------------------------ //
+
+function nodeColor(node) {
+  const t = node.data('type'), s = (node.data('severity') || '').toLowerCase();
+  if (t === 'host') return '#1565C0';
+  if (t === 'service') return '#00838F';
+  if (t === 'vulnerability') {
+    if (s === 'critical') return '#B71C1C';
+    if (s === 'high')     return '#E65100';
+    if (s === 'medium')   return '#F9A825';
+    if (s === 'low')      return '#0277BD';
+    return '#546E7A';
+  }
+  if (t === 'credential') return '#2E7D32';
+  if (t === 'access') return (node.data('access_level') === 'root') ? '#F57F17' : '#7B1FA2';
+  return '#455A64';
+}
+
+function nodeShape(node) {
+  const t = node.data('type');
+  if (t === 'host')          return 'diamond';
+  if (t === 'service')       return 'rectangle';
+  if (t === 'vulnerability') return 'triangle';
+  if (t === 'credential')    return 'hexagon';
+  if (t === 'access')        return node.data('access_level') === 'root' ? 'star' : 'ellipse';
+  return 'ellipse';
+}
+
+function edgeColor(edge) {
+  const t = edge.data('type');
+  if (t === 'has_service')      return '#78909C';
+  if (t === 'exposes_vuln')     return '#EF5350';
+  if (t === 'yields_cred')      return '#66BB6A';
+  if (t === 'grants_access')    return '#FFA726';
+  if (t === 'lateral_movement') return '#AB47BC';
+  return '#546E7A';
+}
+
+function edgeStyle(edge) {
+  const t = edge.data('type');
+  if (t === 'yields_cred')      return 'dashed';
+  if (t === 'lateral_movement') return 'dotted';
+  return 'solid';
+}
+
+// ------------------------------------------------------------------ //
+// Cytoscape init                                                      //
+// ------------------------------------------------------------------ //
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: [],
+  style: [
+    {
+      selector: 'node',
+      style: {
+        'background-color': nodeColor,
+        'shape': nodeShape,
+        'label': 'data(label)',
+        'color': '#dde',
+        'font-size': '10px',
+        'text-valign': 'bottom',
+        'text-halign': 'center',
+        'text-margin-y': '5px',
+        'text-outline-color': '#0a0a18',
+        'text-outline-width': '2px',
+        'width': '26px',
+        'height': '26px',
+        'border-width': '1.5px',
+        'border-color': '#ffffff18',
+        'transition-property': 'width, height, border-color',
+        'transition-duration': '0.15s',
+      }
+    },
+    {
+      selector: 'node:selected',
+      style: {
+        'border-color': '#fff',
+        'border-width': '2.5px',
+        'width': '32px',
+        'height': '32px',
+      }
+    },
+    {
+      selector: 'node.new-node',
+      style: { 'opacity': 0.5 }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'line-color': edgeColor,
+        'line-style': edgeStyle,
+        'target-arrow-color': edgeColor,
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'width': 1.5,
+        'label': 'data(label)',
+        'font-size': '8px',
+        'color': '#667',
+        'text-outline-color': '#0a0a18',
+        'text-outline-width': '2px',
+        'text-rotation': 'autorotate',
+      }
+    },
+    {
+      selector: 'edge:selected',
+      style: { 'width': 2.5, 'line-color': '#fff', 'target-arrow-color': '#fff' }
+    },
+  ],
+  minZoom: 0.05,
+  maxZoom: 6,
+  wheelSensitivity: 0.25,
+  userZoomingEnabled: true,
+  userPanningEnabled: true,
+  boxSelectionEnabled: false,
+});
+
+// ------------------------------------------------------------------ //
+// Physics layout (fcose)                                             //
+// The key insight: existing nodes are pinned via fixedNodeConstraint //
+// so only newly added nodes get repositioned.                        //
+// ------------------------------------------------------------------ //
+
+const posCache = {};     // id -> {x, y} — last known position of each node
+let layoutTimer  = null;
+let firstLayout  = true; // auto-fit only on first layout
+
+function savePositions() {
+  cy.nodes().forEach(n => { posCache[n.id()] = { ...n.position() }; });
+}
+
+function viewportCenter() {
+  const ext = cy.extent();
+  return { x: (ext.x1 + ext.x2) / 2, y: (ext.y1 + ext.y2) / 2 };
+}
+
+function runLayout(incremental = false) {
+  if (cy.nodes().length === 0) return;
+  clearTimeout(layoutTimer);
+
+  // Build fixed constraints for all already-positioned nodes
+  const fixed = [];
+  if (incremental) {
+    cy.nodes().not('.new-node').forEach(n => {
+      const pos = posCache[n.id()];
+      if (pos) fixed.push({ nodeId: n.id(), position: { ...pos } });
+    });
+  }
+
+  const shouldFit = firstLayout || (!incremental && cy.nodes().length <= 6);
+
+  layoutTimer = setTimeout(() => {
+    cy.layout({
+      name: 'fcose',
+      quality: 'default',
+      animate: true,
+      animationDuration: 450,
+      animationEasing: 'ease-out',
+      randomize: !incremental || fixed.length === 0,
+      // Physics tuning — satisfying gravity + repulsion
+      nodeRepulsion: () => 6000,
+      idealEdgeLength: () => 130,
+      edgeElasticity: () => 0.40,
+      gravity: 0.30,
+      gravityRange: 3.5,
+      gravityCompound: 1.0,
+      gravityRangeCompound: 1.5,
+      numIter: 2500,
+      initialEnergyOnIncremental: 0.4,
+      fixedNodeConstraint: fixed,
+      fit: shouldFit,
+      padding: 60,
+      stop() {
+        cy.nodes('.new-node').removeClass('new-node').style('opacity', 1);
+        savePositions();
+        if (shouldFit) {
+          firstLayout = false;
+          cy.animate({ fit: { eles: cy.elements(), padding: 60 }, duration: 300 });
+        }
+      },
+    }).run();
+  }, incremental ? 150 : 350);
+}
+
+function fitGraph() {
+  if (cy.nodes().length === 0) return;
+  cy.animate({ fit: { eles: cy.elements(), padding: 60 }, duration: 400 });
+}
+
+// ------------------------------------------------------------------ //
+// Safe add: new nodes start near viewport center, not at (0,0)       //
+// ------------------------------------------------------------------ //
+
+function safeAddNode(data) {
+  if (!data || !data.id) return;
+
+  if (cy.getElementById(data.id).length > 0) {
+    cy.getElementById(data.id).data(data);
+    return;
+  }
+
+  // Place new node at viewport center + small jitter
+  const c = viewportCenter();
+  const jitter = 80;
+  cy.add({
+    group: 'nodes',
+    data,
+    position: {
+      x: c.x + (Math.random() - 0.5) * jitter,
+      y: c.y + (Math.random() - 0.5) * jitter,
+    },
+    classes: 'new-node',
+  });
+}
+
+function safeAddEdge(data) {
+  if (!data || !data.id) return;
+  if (cy.getElementById(data.id).length > 0) {
+    cy.getElementById(data.id).data(data);
+    return;
+  }
+  cy.add({ group: 'edges', data });
+}
+
+// ------------------------------------------------------------------ //
+// Node click → details panel                                          //
+// ------------------------------------------------------------------ //
+
+const TYPE_COLORS = {
+  host: '#1565C0', service: '#00838F', vulnerability: '#EF5350',
+  credential: '#2E7D32', access: '#F57F17',
+};
+
+cy.on('tap', 'node', evt => {
+  const d = evt.target.data();
+  const color = TYPE_COLORS[d.type] || '#607D8B';
+  const skip = new Set(['id', 'type', 'timestamp']);
+  const priority = ['label','host','ip','port','protocol','service','version',
+                    'severity','template','username','access_level','matched_at'];
+  const all = Object.keys(d).filter(k => !skip.has(k));
+  const ordered = [...priority.filter(k => all.includes(k)), ...all.filter(k => !priority.includes(k))];
+
+  let html = `<div class="type-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${d.type||'node'}</div>`;
+  for (const k of ordered) {
+    let v = d[k];
+    if (v == null || v === '') continue;
+    if (Array.isArray(v)) v = v.slice(0,8).join(', ') + (v.length > 8 ? ` +${v.length-8}` : '');
+    else if (typeof v === 'object') v = JSON.stringify(v);
+    html += `<div class="detail-row"><span class="detail-key">${esc(k)}</span><span class="detail-val">${esc(String(v))}</span></div>`;
+  }
+  document.getElementById('node-details').innerHTML = html;
+});
+
+cy.on('tap', evt => {
+  if (evt.target === cy)
+    document.getElementById('node-details').innerHTML = '<div id="details-empty">Click a node to inspect it</div>';
+});
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ------------------------------------------------------------------ //
+// Activity log                                                        //
+// ------------------------------------------------------------------ //
+
+const MAX_LOG = 120;
+const logEl = document.getElementById('activity-log');
+
+const LOG_CFG = {
+  tool:   { bg: '#1a237e55', color: '#9fa8da', symbol: 'T' },
+  host:   { bg: '#0d47a155', color: '#64b5f6', symbol: 'H' },
+  svc:    { bg: '#00695c55', color: '#4db6ac', symbol: 'S' },
+  vuln:   { bg: '#b71c1c55', color: '#ef9a9a', symbol: '!' },
+  cred:   { bg: '#1b5e2055', color: '#a5d6a7', symbol: 'C' },
+  access: { bg: '#e6510055', color: '#ffcc80', symbol: 'A' },
+  info:   { bg: 'transparent', color: '#556677', symbol: '·' },
+};
+
+function logAdd(type, html) {
+  const cfg = LOG_CFG[type] || LOG_CFG.info;
+  const now = new Date();
+  const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
+
+  const entry = document.createElement('div');
+  entry.className = `log-entry log-${type}`;
+  entry.innerHTML = `
+    <span class="log-time">${t}</span>
+    <span class="log-icon" style="background:${cfg.bg};color:${cfg.color}">${cfg.symbol}</span>
+    <span class="log-text">${html}</span>
+  `;
+  logEl.appendChild(entry);
+  // Auto-scroll to bottom
+  logEl.scrollTop = logEl.scrollHeight;
+
+  // Trim old entries
+  while (logEl.children.length > MAX_LOG) logEl.removeChild(logEl.firstChild);
+}
+
+// ------------------------------------------------------------------ //
+// Phases stepper                                                      //
+// ------------------------------------------------------------------ //
+
+const PHASE_ORDER = ['Reconnaissance', 'Enumeration', 'Exploitation', 'Post-Exploitation', 'Reporting'];
+const TOOL_TO_PHASE = {
+  nmap_scan: 'Enumeration', nuclei_scan: 'Enumeration',
+  ffuf_scan: 'Enumeration', http_request: 'Enumeration',
+  sqlmap_scan: 'Exploitation', metasploit_run: 'Exploitation',
+  shell_command: 'Post-Exploitation', generate_report: 'Reporting',
+};
+
+let currentPhaseIdx = 0;
+
+function setPhase(phaseName) {
+  const idx = PHASE_ORDER.indexOf(phaseName);
+  if (idx === -1 || idx <= currentPhaseIdx) return;
+  currentPhaseIdx = idx;
+
+  const steps = document.querySelectorAll('.phase-step');
+  steps.forEach((step, i) => {
+    step.classList.remove('done', 'active');
+    if (i < idx) step.classList.add('done');
+    else if (i === idx) step.classList.add('active');
+  });
+  // Mark connectors between done steps
+  document.querySelectorAll('.phase-connector').forEach((c, i) => {
+    c.style.background = i < idx ? '#2e7d32' : 'var(--border)';
+  });
+}
+
+function updateToolBadge(tool, phase) {
+  const badge = document.getElementById('current-tool-badge');
+  if (!tool) { badge.innerHTML = 'Idle'; return; }
+  badge.innerHTML = `Running: <span class="tool-name">${esc(tool)}</span>${phase ? ` &mdash; ${esc(phase)}` : ''}`;
+}
+
+// ------------------------------------------------------------------ //
+// Status bar                                                          //
+// ------------------------------------------------------------------ //
+
+function refreshCounts() {
+  document.getElementById('stat-nodes').textContent = cy.nodes().length;
+  document.getElementById('stat-edges').textContent = cy.edges().length;
+}
+
+function updateStatusBar(evt) {
+  if (evt.iteration != null) document.getElementById('stat-iter').textContent = evt.iteration;
+  if (evt.target) document.getElementById('stat-target').textContent = evt.target;
+  refreshCounts();
+}
+
+// ------------------------------------------------------------------ //
+// SSE event handling                                                  //
+// ------------------------------------------------------------------ //
+
+const es = new EventSource('/api/events');
+
+es.onopen = () => {
+  document.getElementById('live-indicator').textContent = 'LIVE';
+  document.getElementById('live-indicator').style.color = '#66bb6a';
+};
+es.onerror = () => {
+  document.getElementById('live-indicator').textContent = 'OFFLINE';
+  document.getElementById('live-indicator').style.color = '#ef5350';
+  document.getElementById('live-indicator').style.animation = 'none';
+};
+
+es.onmessage = evt => {
+  let e;
+  try { e = JSON.parse(evt.data); } catch { return; }
+  if (e.type === 'ping') return;
+
+  if (e.type === 'graph_snapshot') {
+    cy.elements().remove();
+    Object.keys(posCache).forEach(k => delete posCache[k]);
+    firstLayout = true;
+    if (e.elements && e.elements.length > 0) {
+      // Add all nodes with jitter around center before layout
+      e.elements.filter(el => el.data && !el.data.source).forEach(el => {
+        safeAddNode(el.data);
+      });
+      e.elements.filter(el => el.data && el.data.source).forEach(el => {
+        safeAddEdge(el.data);
+      });
+      runLayout(false);
+    }
+    refreshCounts();
+    return;
+  }
+
+  if (e.type === 'node_added') {
+    const nd = e.node;
+    safeAddNode(nd);
+    // Log it
+    if (nd.type === 'host')          logAdd('host',   `Host discovered: <strong>${esc(nd.label)}</strong>`);
+    if (nd.type === 'service')       logAdd('svc',    `Service: <strong>${esc(nd.label)}</strong>`);
+    if (nd.type === 'vulnerability') logAdd('vuln',   `Vulnerability: <strong>${esc(nd.label)}</strong>`);
+    if (nd.type === 'credential')    logAdd('cred',   `Credentials: <strong>${esc(nd.label)}</strong>`);
+    if (nd.type === 'access')        logAdd('access', `Access gained: <strong>${esc(nd.label)}</strong>`);
+    runLayout(true);
+    refreshCounts();
+    return;
+  }
+
+  if (e.type === 'node_updated') {
+    if (cy.getElementById(e.node.id).length > 0)
+      cy.getElementById(e.node.id).data(e.node);
+    else
+      safeAddNode(e.node);
+    refreshCounts();
+    return;
+  }
+
+  if (e.type === 'edge_added') {
+    safeAddEdge(e.edge);
+    if (e.edge.type === 'lateral_movement')
+      logAdd('info', `Lateral movement: <strong>${esc(e.edge.source)}</strong> → <strong>${esc(e.edge.target)}</strong>`);
+    runLayout(true);
+    refreshCounts();
+    return;
+  }
+
+  if (e.type === 'status') {
+    updateStatusBar(e);
+    const tool = e.tool;
+    const phase = e.phase;
+    if (tool) {
+      logAdd('tool', `Tool: <strong>${esc(tool)}</strong>`);
+      const inferredPhase = TOOL_TO_PHASE[tool];
+      if (inferredPhase) setPhase(inferredPhase);
+    }
+    if (phase) setPhase(phase);
+    updateToolBadge(tool, phase);
+    return;
+  }
+};
+
+// ------------------------------------------------------------------ //
+// Initial load                                                        //
+// ------------------------------------------------------------------ //
+
+fetch('/api/status')
+  .then(r => r.json())
+  .then(s => {
+    updateStatusBar(s);
+    if (s.tool) updateToolBadge(s.tool, s.phase);
+    if (s.phase) setPhase(s.phase);
+    if (s.target) document.getElementById('stat-target').textContent = s.target;
+  })
+  .catch(() => {});
+
+// ------------------------------------------------------------------ //
+// Keyboard shortcuts                                                  //
+// ------------------------------------------------------------------ //
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); fitGraph(); }
+  if (e.key === 'Escape') {
+    cy.elements().unselect();
+    document.getElementById('node-details').innerHTML = '<div id="details-empty">Click a node to inspect it</div>';
+  }
+});
+
+// ------------------------------------------------------------------ //
+// Legend toggle                                                       //
+// ------------------------------------------------------------------ //
+
+function toggleLegend() {
+  document.getElementById('legend').classList.toggle('visible');
+}
+document.addEventListener('click', e => {
+  const l = document.getElementById('legend');
+  if (!l.contains(e.target) && !e.target.matches('.tb-btn[onclick*=Legend]'))
+    l.classList.remove('visible');
+});
+</script>
+</body>
+</html>

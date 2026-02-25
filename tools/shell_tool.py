@@ -111,8 +111,10 @@ def run_shell_command(
         return _action_stop_background(pid)
     elif action == "store_credentials":
         return _action_store_credentials(host, username, password)
+    elif action == "run_ssh":
+        return _action_run_ssh(host, command, timeout_seconds, dry_run)
     else:
-        return json.dumps({"error": "INVALID_ACTION", "message": f"Unknown action: {action!r}. Use: run, run_background, check_background, stop_background, store_credentials"})
+        return json.dumps({"error": "INVALID_ACTION", "message": f"Unknown action: {action!r}. Use: run, run_background, run_ssh, check_background, stop_background, store_credentials"})
 
 
 # ------------------------------------------------------------------ #
@@ -132,27 +134,34 @@ def _action_store_credentials(
         })
     with _ssh_lock:
         _ssh_credentials[host] = {"username": username, "password": password}
+    import platform
+    on_windows = platform.system() == "Windows"
+    ssh_hint = (
+        f"Use action='run_ssh' with host='{host}' and command='...' to run commands on the target. "
+        "This uses Paramiko directly and works on all platforms without sshpass."
+        if on_windows else
+        f"SSH commands targeting this host will now be auto-wrapped with sshpass. "
+        f"You can also use action='run_ssh' with host='{host}' for a cleaner Paramiko-based connection."
+    )
     return json.dumps({
         "status": "stored",
         "host": host,
         "username": username,
-        "message": (
-            f"Credentials stored for {username}@{host}. "
-            f"SSH commands targeting this host will now be auto-wrapped with sshpass."
-        ),
+        "message": f"Credentials stored for {username}@{host}. {ssh_hint}",
     })
 
 
 def _auto_wrap_ssh(command: str) -> str:
     """
-    If the command is an SSH invocation targeting a host with stored credentials,
-    wrap it with sshpass and add -o StrictHostKeyChecking=no automatically.
-
-    Handles patterns like:
-      ssh user@host "cmd"
-      ssh -o Something user@host "cmd"
-    Does NOT wrap if the command already contains 'sshpass'.
+    On Linux/Mac: wrap SSH commands targeting a host with stored credentials
+    with sshpass and -o StrictHostKeyChecking=no.
+    On Windows: sshpass is not available — return the command unchanged.
+    The run_ssh action should be used instead for password-based SSH on Windows.
     """
+    import platform
+    if platform.system() == "Windows":
+        return command  # sshpass unavailable; use action='run_ssh' instead
+
     if "sshpass" in command:
         return command  # Already wrapped
 
@@ -164,8 +173,6 @@ def _auto_wrap_ssh(command: str) -> str:
         return command
 
     _prefix, user, host, rest = ssh_match.groups()
-
-    # Strip any trailing port or whitespace from host (e.g. host:port)
     host_clean = host.split(":")[0].strip()
 
     with _ssh_lock:
@@ -174,9 +181,7 @@ def _auto_wrap_ssh(command: str) -> str:
     if not creds:
         return command  # No stored creds for this host
 
-    # Build sshpass-wrapped command
     passwd = creds["password"]
-    # Ensure StrictHostKeyChecking=no is present
     strict_flag = "-o StrictHostKeyChecking=no"
     if strict_flag not in command:
         return f"sshpass -p '{passwd}' ssh {strict_flag} {user}@{host}{rest}"
@@ -213,6 +218,11 @@ def _action_run(
     cwd = _get_workdir(working_dir)
 
     try:
+        # PYTHONUNBUFFERED=1 prevents Python subprocesses from fully buffering
+        # stdout when piped — without this, print() output is silently lost.
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+
         run_kwargs: Dict[str, Any] = dict(
             shell=True,
             text=True,
@@ -220,6 +230,7 @@ def _action_run(
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
         )
         if input_data is not None:
             run_kwargs["input"] = input_data
@@ -243,6 +254,89 @@ def _action_run(
     except Exception as exc:
         return json.dumps({
             "status": "error",
+            "command": command,
+            "message": str(exc),
+        })
+
+
+def _action_run_ssh(
+    host: Optional[str],
+    command: Optional[str],
+    timeout_seconds: int,
+    dry_run: bool,
+) -> str:
+    """
+    Run a single command on a remote host over SSH using Paramiko.
+
+    Uses credentials stored via action='store_credentials'.
+    Works on Windows, Linux, and Mac — no sshpass required.
+    """
+    if not host:
+        return json.dumps({"error": "MISSING_PARAM", "message": "host is required for action=run_ssh"})
+    if not command:
+        return json.dumps({"error": "MISSING_PARAM", "message": "command is required for action=run_ssh"})
+
+    with _ssh_lock:
+        creds = _ssh_credentials.get(host)
+
+    if not creds:
+        return json.dumps({
+            "error": "NO_CREDENTIALS",
+            "message": (
+                f"No credentials stored for {host}. "
+                "Call action='store_credentials' with host, username, and password first."
+            ),
+        })
+
+    if dry_run:
+        return json.dumps({
+            "status": "dry_run",
+            "host": host,
+            "user": creds["username"],
+            "command": command,
+            "stdout": "[DRY RUN] SSH command not executed.",
+            "stderr": "",
+            "returncode": 0,
+        })
+
+    try:
+        import paramiko
+    except ImportError:
+        return json.dumps({
+            "error": "MISSING_DEPENDENCY",
+            "message": "paramiko is not installed. Run: pip install paramiko",
+        })
+
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            host,
+            username=creds["username"],
+            password=creds["password"],
+            timeout=30,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        _stdin, stdout, stderr = client.exec_command(command, timeout=timeout_seconds)
+        stdout_str = stdout.read().decode("utf-8", errors="replace")
+        stderr_str = stderr.read().decode("utf-8", errors="replace")
+        returncode = stdout.channel.recv_exit_status()
+        client.close()
+
+        return json.dumps({
+            "status": "success",
+            "host": host,
+            "user": creds["username"],
+            "command": command,
+            "stdout": _cap_output(stdout_str),
+            "stderr": _cap_output(stderr_str),
+            "returncode": returncode,
+        })
+    except Exception as exc:
+        return json.dumps({
+            "status": "error",
+            "host": host,
             "command": command,
             "message": str(exc),
         })

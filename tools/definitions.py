@@ -295,30 +295,29 @@ TOOL_DEFINITIONS: List[dict] = [
     {
         "name": "shell_command",
         "description": (
-            "Execute an arbitrary shell command on the local machine. "
-            "Use this for anything not covered by specialized tools: SSH into targets, "
-            "set up reverse shell listeners, compile exploits, run linpeas, "
-            "enumerate services (smbclient, ftp, etc.), upload/download files, "
-            "and perform privilege escalation. "
-            "Supports foreground execution, background process management, "
-            "and SSH credential storage. "
-            "IMPORTANT: After discovering SSH credentials, call with action='store_credentials' "
-            "to store them. All subsequent SSH commands will be auto-wrapped with sshpass — "
-            "you can then use plain 'ssh user@host \"command\"' syntax without sshpass."
+            "Execute shell commands, run remote SSH commands, and manage background processes. "
+            "Use this for anything not covered by specialized tools: running commands on SSH targets, "
+            "setting up reverse shell listeners, compiling exploits, running linpeas, "
+            "enumerating services (smbclient, ftp, etc.), uploading/downloading files, "
+            "and performing privilege escalation. "
+            "IMPORTANT: After discovering SSH credentials, always call with action='store_credentials' first. "
+            "Then use action='run_ssh' to execute commands on the target — this uses Paramiko directly "
+            "and works on Windows, Linux, and Mac without requiring sshpass."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "run_background", "check_background", "stop_background", "store_credentials"],
+                    "enum": ["run", "run_ssh", "run_background", "check_background", "stop_background", "store_credentials"],
                     "description": (
-                        "'run' — execute and wait for completion; "
-                        "'run_background' — start in background, return PID; "
+                        "'run' — execute a local shell command and wait for completion; "
+                        "'run_ssh' — run a command on a REMOTE host over SSH using stored credentials "
+                        "(requires host + command; works on all platforms including Windows, no sshpass needed); "
+                        "'run_background' — start local command in background, return PID; "
                         "'check_background' — read output from background PID; "
                         "'stop_background' — terminate background PID; "
-                        "'store_credentials' — save SSH creds for a host (requires host, username, password). "
-                        "After storing, all 'ssh user@host' commands are auto-wrapped with sshpass."
+                        "'store_credentials' — save SSH creds for a host (requires host, username, password)."
                     ),
                 },
                 "command": {
@@ -347,7 +346,7 @@ TOOL_DEFINITIONS: List[dict] = [
                 },
                 "host": {
                     "type": "string",
-                    "description": "Target host IP/hostname (required for store_credentials).",
+                    "description": "Target host IP/hostname (required for store_credentials and run_ssh).",
                 },
                 "username": {
                     "type": "string",

@@ -76,6 +76,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Default listener port for reverse shells (default 4444). Overrides LPORT from .env.",
     )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Disable the real-time browser-based attack graph UI.",
+    )
+    parser.add_argument(
+        "--ui-port",
+        type=int,
+        default=5000,
+        metavar="PORT",
+        help="Port for the attack graph UI server (default 5000).",
+    )
     return parser.parse_args()
 
 
@@ -196,16 +208,37 @@ def main() -> None:
     session_logger = SessionLogger(config.output_dir, target)
 
     print(f"[*] Session log: {session_logger.log_path}")
-    print(f"[*] Provider: {config.provider} | Model: {config.claude_model}")
+    cache_note = " + prompt caching" if config.provider == "openrouter" else " (prompt caching)"
+    print(f"[*] Provider: {config.provider}{cache_note} | Model: {config.claude_model}")
     print(f"[*] Max iterations: {config.max_iterations} (HTB mode may auto-increase to 50)")
     print(f"[*] Agent mode: {config.agent_mode}")
+    print(f"[*] Context: max_result={config.max_tool_result_chars}c  history={config.max_history_turns} turns  delay={config.min_iter_delay}s")
     print()
+
+    # Start attack graph UI (unless --no-ui)
+    graph_updater = None
+    if not getattr(args, 'no_ui', False):
+        try:
+            from graph_state import GraphState
+            from graph_updater import GraphUpdater
+            import ui_server
+            gs = GraphState()
+            gs._status_target = target
+            graph_updater = GraphUpdater(gs)
+            ui_server.start_server(gs, port=args.ui_port)
+            ui_server._status["target"] = target
+            print(f"[UI] Attack graph live at http://localhost:{args.ui_port}")
+            print()
+        except ImportError as e:
+            print(f"[UI] Skipping graph UI (missing dependency: {e})")
+            print()
 
     agent = SecurityAgent(
         config=config,
         scope=scope_enforcer,
         target=target,
         session_logger=session_logger,
+        graph_updater=graph_updater,
     )
 
     try:

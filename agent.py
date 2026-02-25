@@ -12,6 +12,7 @@ The agent drives through the full pentest lifecycle by:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from config import Config
@@ -33,11 +34,13 @@ class SecurityAgent:
         scope: ScopeEnforcer,
         target: str,
         session_logger: SessionLogger,
+        graph_updater=None,
     ) -> None:
         self.config = config
         self.scope = scope
         self.target = target
         self.logger = session_logger
+        self.graph_updater = graph_updater
         self.dispatcher = ToolDispatcher(config, scope, session_logger)
 
         # Create the LLM client based on provider config
@@ -49,6 +52,7 @@ class SecurityAgent:
         self.llm = create_llm_client(config.provider, api_key)
         self.messages: List[Dict[str, Any]] = []
         self.report_path: Optional[str] = None
+        self._last_llm_call: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -98,7 +102,16 @@ class SecurityAgent:
             self.logger.log_iteration(iteration)
             print(f"\n[*] Iteration {iteration}/{max_iter}", flush=True)
 
+            # ---- Pace calls to avoid TPM rate limits ----------------- #
+            if self.config.min_iter_delay > 0 and self._last_llm_call > 0:
+                elapsed = time.time() - self._last_llm_call
+                wait = self.config.min_iter_delay - elapsed
+                if wait > 0:
+                    print(f"    [~] Pacing: waiting {wait:.1f}s (MIN_ITER_DELAY)", flush=True)
+                    time.sleep(wait)
+
             # ---- Call LLM (with retry on rate limits) ---------------- #
+            self._last_llm_call = time.time()
             try:
                 response = self.llm.call(
                     model=self.config.claude_model,
@@ -181,7 +194,14 @@ class SecurityAgent:
                 )
                 print(f"    -> Calling: {tool_name}({_summarize_input(tool_input)})", flush=True)
 
+                if self.graph_updater:
+                    import ui_server
+                    ui_server.update_status(iteration, tool_name)
+
                 result_str = self.dispatcher.dispatch(tool_name, tool_input)
+
+                if self.graph_updater:
+                    self.graph_updater.process_tool_result(tool_name, tool_input, result_str, iteration)
 
                 self.logger.log_tool_result(
                     tool_use_id=tool_use_id,
@@ -201,14 +221,27 @@ class SecurityAgent:
                     except (json.JSONDecodeError, KeyError):
                         pass
 
+                # Truncate large results before storing in message history.
+                # Full output is already in the session log and graph_updater.
+                history_content = _truncate_result(result_str, self.config.max_tool_result_chars)
+                if len(history_content) < len(result_str):
+                    print(
+                        f"    [~] Result truncated for history: {len(result_str)} → {len(history_content)} chars",
+                        flush=True,
+                    )
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
-                    "content": result_str,
+                    "content": history_content,
                 })
 
             # ---- Append ALL tool results as ONE user message --------- #
             self.messages.append({"role": "user", "content": tool_results})
+
+            # ---- Prune old history to keep context bounded ----------- #
+            if self.config.max_history_turns > 0:
+                self._prune_history()
 
             # ---- Stop after report is confirmed --------------------- #
             if report_called_this_turn:
@@ -258,6 +291,23 @@ class SecurityAgent:
     # Helpers                                                              #
     # ------------------------------------------------------------------ #
 
+    def _prune_history(self) -> None:
+        """
+        Keep the initial user message + the last max_history_turns assistant/user pairs.
+        Each "turn" is one assistant message + one user (tool results) message = 2 entries.
+        """
+        max_turns = self.config.max_history_turns
+        # messages[0] = initial user seed; subsequent pairs are [assistant, user, assistant, user, ...]
+        keep = 1 + max_turns * 2
+        if len(self.messages) <= keep:
+            return
+        dropped_pairs = (len(self.messages) - keep) // 2
+        self.messages = self.messages[:1] + self.messages[-max_turns * 2:]
+        print(
+            f"    [~] History pruned: dropped {dropped_pairs} old turn(s), keeping last {max_turns}",
+            flush=True,
+        )
+
     def _build_scope_description(self) -> str:
         parts: List[str] = []
         if self.config.allowed_scope:
@@ -278,6 +328,17 @@ def _serialize_content(content: Any) -> Any:
     if hasattr(content, "__dict__"):
         return {k: _serialize_content(v) for k, v in vars(content).items()}
     return content
+
+
+def _truncate_result(result: str, max_chars: int) -> str:
+    """Cap a tool result string for message history. 0 means unlimited."""
+    if max_chars <= 0 or len(result) <= max_chars:
+        return result
+    keep = max_chars - 120
+    return (
+        result[:keep]
+        + f"\n... [TRUNCATED: showing {keep}/{len(result)} chars — full output in session log]"
+    )
 
 
 def _summarize_input(tool_input: Dict) -> str:

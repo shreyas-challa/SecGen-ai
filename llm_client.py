@@ -50,7 +50,7 @@ class LLMResponse:
 # Tool definition converters                                           #
 # ------------------------------------------------------------------ #
 
-def _anthropic_tools_to_openai(tools: List[Dict]) -> List[Dict]:
+def _anthropic_tools_to_openai(tools: List[Dict], add_cache_control: bool = False) -> List[Dict]:
     """Convert Anthropic tool schemas to OpenAI function-calling format."""
     openai_tools = []
     for tool in tools:
@@ -62,10 +62,15 @@ def _anthropic_tools_to_openai(tools: List[Dict]) -> List[Dict]:
                 "parameters": tool.get("input_schema", {}),
             },
         })
+    # Mark last tool for caching — everything up to and including it will be cached
+    if add_cache_control and openai_tools:
+        openai_tools[-1] = {**openai_tools[-1], "cache_control": {"type": "ephemeral"}}
     return openai_tools
 
 
-def _anthropic_messages_to_openai(messages: List[Dict], system: str) -> List[Dict]:
+def _anthropic_messages_to_openai(
+    messages: List[Dict], system: str, use_cache: bool = False
+) -> List[Dict]:
     """
     Convert Anthropic message format to OpenAI format.
 
@@ -78,7 +83,14 @@ def _anthropic_messages_to_openai(messages: List[Dict], system: str) -> List[Dic
     openai_msgs: List[Dict] = []
 
     if system:
-        openai_msgs.append({"role": "system", "content": system})
+        if use_cache:
+            # Array form required for cache_control to be forwarded to Anthropic
+            openai_msgs.append({
+                "role": "system",
+                "content": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            })
+        else:
+            openai_msgs.append({"role": "system", "content": system})
 
     for msg in messages:
         role = msg["role"]
@@ -239,7 +251,9 @@ class AnthropicProvider:
 
 
 class OpenRouterProvider:
-    """OpenRouter API client (OpenAI-compatible, hosts Claude models)."""
+    """OpenRouter API client with prompt caching for Anthropic/Claude models."""
+
+    _ANTHROPIC_BETA = ["prompt-caching-2024-07-31"]
 
     def __init__(self, api_key: str) -> None:
         from openai import OpenAI
@@ -248,6 +262,10 @@ class OpenRouterProvider:
             api_key=api_key,
         )
         self._openai = __import__("openai")
+
+    @staticmethod
+    def _is_claude(model: str) -> bool:
+        return "anthropic" in model.lower() or "claude" in model.lower()
 
     def call(
         self,
@@ -258,8 +276,13 @@ class OpenRouterProvider:
         messages: List[Dict],
         max_retries: int = 3,
     ) -> LLMResponse:
-        openai_messages = _anthropic_messages_to_openai(messages, system)
-        openai_tools = _anthropic_tools_to_openai(tools)
+        use_cache = self._is_claude(model)
+        openai_messages = _anthropic_messages_to_openai(messages, system, use_cache=use_cache)
+        openai_tools = _anthropic_tools_to_openai(tools, add_cache_control=use_cache)
+
+        extra_body: Dict[str, Any] = {}
+        if use_cache:
+            extra_body["anthropic_beta"] = self._ANTHROPIC_BETA
 
         for attempt in range(max_retries + 1):
             try:
@@ -268,6 +291,7 @@ class OpenRouterProvider:
                     max_tokens=max_tokens,
                     messages=openai_messages,
                     tools=openai_tools,
+                    **({"extra_body": extra_body} if extra_body else {}),
                 )
                 return self._normalize_response(response)
             except self._openai.RateLimitError:
@@ -290,11 +314,9 @@ class OpenRouterProvider:
 
         content: List[Any] = []
 
-        # Add text content
         if message.content:
             content.append(TextBlock(text=message.content))
 
-        # Convert tool_calls to ToolUseBlock
         if message.tool_calls:
             for tc in message.tool_calls:
                 try:
@@ -307,7 +329,6 @@ class OpenRouterProvider:
                     input=args,
                 ))
 
-        # Map finish_reason
         stop_reason_map = {
             "stop": "end_turn",
             "tool_calls": "tool_use",
@@ -319,6 +340,13 @@ class OpenRouterProvider:
         if response.usage:
             usage.input_tokens = response.usage.prompt_tokens or 0
             usage.output_tokens = response.usage.completion_tokens or 0
+            # OpenRouter returns cache metrics for Anthropic models in prompt_tokens_details
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            if details:
+                cached = getattr(details, "cached_tokens", 0) or 0
+                if cached:
+                    usage.cache_read_input_tokens = cached
+                    usage.input_tokens = max(0, usage.input_tokens - cached)
 
         return LLMResponse(
             content=content,
