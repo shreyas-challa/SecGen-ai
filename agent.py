@@ -169,8 +169,21 @@ class SecurityAgent:
 
             # ---- Check for natural stop ----------------------------- #
             if stop_reason == "end_turn" and not tool_use_blocks:
-                print("[*] Claude finished without tool calls — stopping.", flush=True)
-                break
+                if generate_report_called:
+                    print("[*] Claude finished — report generated.", flush=True)
+                    break
+                # Claude wrote a reasoning/summary block without calling any tools.
+                # This happens when the model "thinks out loud" mid-engagement.
+                # Nudge it to continue rather than treating it as a terminal stop.
+                print("[*] Claude paused without tool calls — nudging to continue...", flush=True)
+                self.messages.append({
+                    "role": "user",
+                    "content": (
+                        "Continue the penetration test. Use your tools to proceed with the next phase. "
+                        "Do NOT stop until you have achieved root access and called generate_report."
+                    ),
+                })
+                continue
 
             if not tool_use_blocks:
                 # stop_reason == "max_tokens" or other — no tools to process

@@ -76,7 +76,8 @@ class ToolDispatcher:
                 target=inp["target"],
                 scan_type=inp.get("scan_type", "version"),
                 ports=inp.get("ports"),
-                extra_flags=inp.get("extra_flags"),
+                # Accept "flags" (natural name the model tends to use) as well as "extra_flags"
+                extra_flags=inp.get("extra_flags") or inp.get("flags"),
                 timeout_seconds=int(inp.get("timeout_seconds", 300)),
                 nmap_path=cfg.nmap_path,
                 scope=self.scope,
@@ -155,7 +156,7 @@ class ToolDispatcher:
 
         elif tool_name == "shell_command":
             return run_shell_command(
-                action=inp["action"],
+                action=inp.get("action", "run"),  # default to "run" when omitted
                 command=inp.get("command"),
                 pid=inp.get("pid"),
                 timeout_seconds=int(inp.get("timeout_seconds", cfg.shell_timeout)),

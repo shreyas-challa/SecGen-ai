@@ -31,21 +31,22 @@ TOOL_DEFINITIONS: List[dict] = [
                     "type": "string",
                     "enum": ["stealth", "connect", "udp", "vuln", "version"],
                     "description": (
-                        "Scan technique: "
+                        "Scan technique shorthand (optional, default 'version'): "
                         "'stealth' = SYN scan (-sS), "
                         "'connect' = TCP connect (-sT), "
                         "'udp' = UDP scan (-sU), "
                         "'vuln' = NSE vuln scripts (--script=vuln), "
-                        "'version' = service/version detection (-sV -sC)."
+                        "'version' = service/version detection (-sV -sC). "
+                        "Ignored if 'flags' covers the same options."
                     ),
                 },
                 "ports": {
                     "type": "string",
-                    "description": "Port specification, e.g. '80,443', '1-1024', 'top1000'. Defaults to top 1000 ports.",
+                    "description": "Port specification, e.g. '80,443', '1-1024', '-p-' (all ports). Defaults to top 1000 ports.",
                 },
-                "extra_flags": {
+                "flags": {
                     "type": "string",
-                    "description": "Additional raw nmap flags, e.g. '--script=http-title --open'.",
+                    "description": "Raw nmap flags to append, e.g. '-sC -sV -T4 -p-' or '-sU --top-ports 100 -T4'.",
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -53,7 +54,7 @@ TOOL_DEFINITIONS: List[dict] = [
                     "default": 300,
                 },
             },
-            "required": ["target", "scan_type"],
+            "required": ["target"],
         },
     },
 

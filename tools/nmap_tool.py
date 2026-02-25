@@ -39,10 +39,17 @@ def run_nmap(
     if dry_run:
         return json.dumps({"dry_run": True, "tool": "nmap", "target": target})
 
-    flags = _SCAN_TYPE_FLAGS.get(scan_type, ["-sV", "-T4"])
-    cmd: List[str] = [nmap_path] + flags + ["-oX", "-"]
+    # If the caller passed raw flags covering scan options, skip the scan_type defaults
+    # to avoid duplicating flags like -sV or -T4.
+    if extra_flags and any(f in extra_flags for f in ("-sS", "-sT", "-sU", "-sV", "-sC")):
+        base_flags: List[str] = []
+    else:
+        base_flags = _SCAN_TYPE_FLAGS.get(scan_type, ["-sV", "-T4"])
 
-    if ports:
+    cmd: List[str] = [nmap_path] + base_flags + ["-oX", "-"]
+
+    # If extra_flags already contain a -p specification, don't add ports separately
+    if ports and (not extra_flags or "-p" not in extra_flags):
         cmd += ["-p", ports]
 
     if extra_flags:
