@@ -4,11 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Attack Surface Graph — Security Agent</title>
-  <!-- Cytoscape + fcose physics layout (gravity & repulsion) -->
+  <!-- Cytoscape (cose layout is built-in — no extra libs needed) -->
   <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-  <script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
-  <script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
-  <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -316,7 +313,7 @@
     #legend h3 { color: var(--accent); font-size: 9px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; margin-top: 8px; }
     #legend h3:first-child { margin-top: 0; }
     .lg-item { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; color: #b0b0c8; }
-    .lg-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+    .lg-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
     .lg-line { width: 22px; height: 2px; flex-shrink: 0; }
   </style>
 </head>
@@ -439,14 +436,14 @@ function nodeColor(node) {
   return '#455A64';
 }
 
-function nodeShape(node) {
+function nodeSize(node) {
   const t = node.data('type');
-  if (t === 'host')          return 'diamond';
-  if (t === 'service')       return 'rectangle';
-  if (t === 'vulnerability') return 'triangle';
-  if (t === 'credential')    return 'hexagon';
-  if (t === 'access')        return node.data('access_level') === 'root' ? 'star' : 'ellipse';
-  return 'ellipse';
+  if (t === 'host')          return 34;
+  if (t === 'service')       return 26;
+  if (t === 'vulnerability') return 22;
+  if (t === 'credential')    return 24;
+  if (t === 'access')        return 30;
+  return 22;
 }
 
 function edgeColor(edge) {
@@ -478,7 +475,8 @@ const cy = cytoscape({
       selector: 'node',
       style: {
         'background-color': nodeColor,
-        'shape': nodeShape,
+        'background-opacity': 0.85,
+        'shape': 'ellipse',
         'label': 'data(label)',
         'color': '#dde',
         'font-size': '10px',
@@ -487,21 +485,30 @@ const cy = cytoscape({
         'text-margin-y': '5px',
         'text-outline-color': '#0a0a18',
         'text-outline-width': '2px',
-        'width': '26px',
-        'height': '26px',
-        'border-width': '1.5px',
-        'border-color': '#ffffff18',
-        'transition-property': 'width, height, border-color',
-        'transition-duration': '0.15s',
+        'width': nodeSize,
+        'height': nodeSize,
+        'border-width': '2px',
+        'border-color': nodeColor,
+        'border-opacity': 0.35,
+        'overlay-opacity': 0,
+        'transition-property': 'background-opacity, border-opacity, width, height',
+        'transition-duration': '0.2s',
       }
     },
     {
       selector: 'node:selected',
       style: {
         'border-color': '#fff',
+        'border-opacity': 1,
         'border-width': '2.5px',
-        'width': '32px',
-        'height': '32px',
+        'background-opacity': 1,
+      }
+    },
+    {
+      selector: 'node.hover',
+      style: {
+        'background-opacity': 1,
+        'border-opacity': 0.8,
       }
     },
     {
@@ -539,18 +546,15 @@ const cy = cytoscape({
 });
 
 // ------------------------------------------------------------------ //
-// Physics layout (fcose)                                             //
-// The key insight: existing nodes are pinned via fixedNodeConstraint //
-// so only newly added nodes get repositioned.                        //
+// Continuous physics layout (cose — built-in)                        //
+// Gravity pulls nodes toward center, repulsion pushes them apart.    //
+// Nodes can be dragged and the simulation reacts in real time.       //
 // ------------------------------------------------------------------ //
 
-const posCache = {};     // id -> {x, y} — last known position of each node
+let activeLayout = null;
 let layoutTimer  = null;
-let firstLayout  = true; // auto-fit only on first layout
-
-function savePositions() {
-  cy.nodes().forEach(n => { posCache[n.id()] = { ...n.position() }; });
-}
+let firstLayout  = true;
+let draggedNode  = null;
 
 function viewportCenter() {
   const ext = cy.extent();
@@ -561,49 +565,54 @@ function runLayout(incremental = false) {
   if (cy.nodes().length === 0) return;
   clearTimeout(layoutTimer);
 
-  // Build fixed constraints for all already-positioned nodes
-  const fixed = [];
-  if (incremental) {
-    cy.nodes().not('.new-node').forEach(n => {
-      const pos = posCache[n.id()];
-      if (pos) fixed.push({ nodeId: n.id(), position: { ...pos } });
-    });
-  }
-
-  const shouldFit = firstLayout || (!incremental && cy.nodes().length <= 6);
+  const shouldFit = firstLayout;
 
   layoutTimer = setTimeout(() => {
-    cy.layout({
-      name: 'fcose',
-      quality: 'default',
+    // Stop any running layout
+    if (activeLayout) { try { activeLayout.stop(); } catch(_) {} }
+
+    activeLayout = cy.layout({
+      name: 'cose',
       animate: true,
-      animationDuration: 450,
-      animationEasing: 'ease-out',
-      randomize: !incremental || fixed.length === 0,
-      // Physics tuning — satisfying gravity + repulsion
-      nodeRepulsion: () => 6000,
-      idealEdgeLength: () => 130,
-      edgeElasticity: () => 0.40,
-      gravity: 0.30,
-      gravityRange: 3.5,
-      gravityCompound: 1.0,
-      gravityRangeCompound: 1.5,
-      numIter: 2500,
-      initialEnergyOnIncremental: 0.4,
-      fixedNodeConstraint: fixed,
+      animationThreshold: 50,
+      refresh: 20,
+      randomize: !incremental,
+      // Physics tuning — Obsidian-like gravity + repulsion
+      nodeRepulsion: function() { return 8000; },
+      idealEdgeLength: function() { return 140; },
+      edgeElasticity: function() { return 100; },
+      gravity: 0.4,
+      numIter: 1000,
+      coolingFactor: 0.95,
+      initialTemp: incremental ? 100 : 300,
+      minTemp: 1.0,
+      nestingFactor: 1.2,
+      nodeOverlap: 20,
       fit: shouldFit,
       padding: 60,
       stop() {
         cy.nodes('.new-node').removeClass('new-node').style('opacity', 1);
-        savePositions();
-        if (shouldFit) {
+        if (shouldFit && firstLayout) {
           firstLayout = false;
           cy.animate({ fit: { eles: cy.elements(), padding: 60 }, duration: 300 });
         }
       },
-    }).run();
-  }, incremental ? 150 : 350);
+    });
+    activeLayout.run();
+  }, incremental ? 100 : 200);
 }
+
+// ---- Drag interaction: grab a node, re-simulate on release ---- //
+cy.on('grab', 'node', evt => { draggedNode = evt.target; });
+cy.on('free', 'node', () => {
+  draggedNode = null;
+  // Re-run a short incremental layout so neighbors settle
+  runLayout(true);
+});
+
+// ---- Hover effect ---- //
+cy.on('mouseover', 'node', evt => evt.target.addClass('hover'));
+cy.on('mouseout',  'node', evt => evt.target.removeClass('hover'));
 
 function fitGraph() {
   if (cy.nodes().length === 0) return;
@@ -622,9 +631,9 @@ function safeAddNode(data) {
     return;
   }
 
-  // Place new node at viewport center + small jitter
+  // Place new node at viewport center + jitter so physics can spread them
   const c = viewportCenter();
-  const jitter = 80;
+  const jitter = 120;
   cy.add({
     group: 'nodes',
     data,
@@ -795,7 +804,6 @@ es.onmessage = evt => {
 
   if (e.type === 'graph_snapshot') {
     cy.elements().remove();
-    Object.keys(posCache).forEach(k => delete posCache[k]);
     firstLayout = true;
     if (e.elements && e.elements.length > 0) {
       // Add all nodes with jitter around center before layout
